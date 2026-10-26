@@ -9,12 +9,10 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from trading_agent.adapters.storage.sqlite_adapter import (
-    DatabaseBusyError,
-    SqliteStorageAdapter,
-)
+from trading_agent.adapters.storage import DatabaseBusyError, SqliteStorageAdapter
 from trading_agent.config import get_settings
 from trading_agent.domain.models import TradeBand
+from trading_agent.ports.storage import StoragePort
 
 st.set_page_config(
     page_title="Trading Agent — Read-Only Dashboard",
@@ -23,8 +21,8 @@ st.set_page_config(
 )
 
 
-def get_storage() -> SqliteStorageAdapter:
-    """Obtain a storage adapter configured from application settings."""
+def get_storage() -> StoragePort:
+    """Obtain a storage port instance configured from application settings."""
     settings = get_settings()
     return SqliteStorageAdapter(db_path=settings.database_path)
 
@@ -38,7 +36,7 @@ def format_band_badge(band: TradeBand) -> str:
     return "🔴 NONE (<60)"
 
 
-def render_overview(storage: SqliteStorageAdapter) -> None:
+def render_overview(storage: StoragePort) -> None:
     """Page 1 — Overview: Table of watchlist symbols with latest scores and bands."""
     st.title("📊 Market Overview — Latest Confidence Scores")
     st.caption("Read-only view of latest confidence meter evaluations across the watchlist.")
@@ -64,12 +62,13 @@ def render_overview(storage: SqliteStorageAdapter) -> None:
         trend_val = check_map.get("Trend Check", "N/A")
         volume_val = check_map.get("Volume Check", "N/A")
         mkt_val = check_map.get("Market Direction Check", "N/A")
+        max_possible = sum(c.max_points for c in score.check_results) if score.check_results else 100
 
         rows.append(
             {
                 "Symbol": score.symbol,
                 "Latest Date": score.date.strftime("%Y-%m-%d") if score.date else "—",
-                "Total Score": f"{score.total_points} / 65",
+                "Total Score": f"{score.total_points} / {max_possible}",
                 "Band": format_band_badge(score.band),
                 "Trend Check": trend_val,
                 "Volume Check": volume_val,
@@ -87,7 +86,7 @@ def render_overview(storage: SqliteStorageAdapter) -> None:
     st.info(f"🕒 Last updated from database at {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}. Total symbols monitored: {len(latest_scores)}.")
 
 
-def render_symbol_detail(storage: SqliteStorageAdapter) -> None:
+def render_symbol_detail(storage: StoragePort) -> None:
     """Page 2 — Symbol Detail: 12-month score history chart & full latest breakdown."""
     st.title("🔍 Symbol Detail & Score History")
 
@@ -141,8 +140,9 @@ def render_symbol_detail(storage: SqliteStorageAdapter) -> None:
         st.markdown("---")
         st.subheader(f"🎯 Latest Score Breakdown ({selected_symbol} on {latest_score.date.isoformat()})")
 
+        max_possible = sum(c.max_points for c in latest_score.check_results) if latest_score.check_results else 100
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total Confidence Points", f"{latest_score.total_points} / 65")
+        col1.metric("Total Confidence Points", f"{latest_score.total_points} / {max_possible}")
         col2.metric("Trade Band", format_band_badge(latest_score.band))
 
         if latest_score.band == TradeBand.FULL:
@@ -163,7 +163,7 @@ def render_symbol_detail(storage: SqliteStorageAdapter) -> None:
             st.info("No individual check records stored for this date.")
 
 
-def render_data_quality(storage: SqliteStorageAdapter) -> None:
+def render_data_quality(storage: StoragePort) -> None:
     """Page 3 — Data Quality: Log of recorded data anomalies, newest first."""
     st.title("🛡️ Data Quality & Anomaly Log")
     st.caption("Transparent audit trail of missing bars, corrupted rows, or feed warnings encountered during backfill.")

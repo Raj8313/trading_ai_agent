@@ -19,6 +19,22 @@ class TradeBand(str, Enum):
     NONE = "NONE"  # Below 60 points
 
 
+class SignalAction(str, Enum):
+    """Action decisions derived from confidence score bands."""
+
+    BUY_FULL = "BUY_FULL"
+    BUY_HALF = "BUY_HALF"
+    PASS = "PASS"
+
+
+class ExitReason(str, Enum):
+    """Reasons for exiting a simulated trade position."""
+
+    STOP = "STOP"
+    TARGET = "TARGET"
+    TIME = "TIME"
+
+
 class Stock(BaseModel):
     """Represents a tradeable stock or market index symbol."""
 
@@ -93,13 +109,39 @@ class Signal(BaseModel):
     date: dt.date = Field(..., description="Signal date")
     score: Score = Field(..., description="Associated confidence score")
     band: TradeBand = Field(..., description="Trade band")
-    action: str = Field(
+    action: SignalAction = Field(
         ..., description="Action decision: BUY_FULL, BUY_HALF, or PASS"
     )
     created_at: dt.datetime = Field(
         default_factory=lambda: dt.datetime.now(dt.timezone.utc),
         description="Timestamp when signal was generated",
     )
+
+
+class ExitDecision(BaseModel):
+    """Decision produced by an exit policy evaluating open position bars."""
+
+    should_exit: bool = Field(..., description="Whether the position must be closed")
+    exit_date: Optional[dt.date] = Field(default=None, description="Date position exits")
+    exit_price: Optional[float] = Field(default=None, description="Simulated execution price")
+    exit_reason: Optional[ExitReason] = Field(default=None, description="Reason for exit (STOP, TARGET, TIME)")
+
+
+class TradeRecord(BaseModel):
+    """Complete simulated trade record for backtesting and performance analytics."""
+
+    symbol: str = Field(..., description="Stock symbol traded")
+    signal_date: dt.date = Field(..., description="Date confidence score/signal was generated")
+    entry_date: dt.date = Field(..., description="Date trade was entered (strictly > signal_date)")
+    entry_price: float = Field(..., gt=0, description="Entry execution price (Day D+1 Open with slippage)")
+    exit_date: dt.date = Field(..., description="Date trade was closed")
+    exit_price: float = Field(..., gt=0, description="Exit execution price with slippage")
+    exit_reason: ExitReason = Field(..., description="Reason for trade exit (STOP, TARGET, TIME)")
+    band: TradeBand = Field(..., description="Confidence meter band at signal time")
+    position_size: float = Field(..., gt=0, description="Virtual capital allocated to this trade")
+    gross_pnl: float = Field(..., description="Gross profit or loss in currency")
+    net_pnl: float = Field(..., description="Net profit or loss after statutory charges and slippage")
+    rule_followed: bool = Field(default=True, description="Whether execution strictly followed strategy rules")
 
 
 class DataQualityIssue(BaseModel):

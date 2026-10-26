@@ -7,7 +7,7 @@ producing auditable scores and actionable trading signals.
 import datetime as dt
 from typing import Optional
 
-from trading_agent.domain.models import Bar, Score, Signal, TradeBand
+from trading_agent.domain.models import Bar, Score, Signal, SignalAction, TradeBand
 from trading_agent.ports.confidence_check import ConfidenceCheckPort
 from trading_agent.strategy.checks.market_direction_check import MarketDirectionCheck
 from trading_agent.strategy.checks.trend_check import TrendCheck
@@ -92,11 +92,11 @@ class ConfidenceMeter:
             Signal instance with BUY_FULL, BUY_HALF, or PASS action.
         """
         if score.band == TradeBand.FULL:
-            action = "BUY_FULL"
+            action = SignalAction.BUY_FULL
         elif score.band == TradeBand.HALF:
-            action = "BUY_HALF"
+            action = SignalAction.BUY_HALF
         else:
-            action = "PASS"
+            action = SignalAction.PASS
 
         return Signal(
             symbol=score.symbol,
