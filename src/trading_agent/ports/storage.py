@@ -77,3 +77,28 @@ class StoragePort(ABC):
             List of DataQualityIssue instances.
         """
         pass
+
+    @abstractmethod
+    def get_latest_scores(self) -> list[Score]:
+        """Retrieve the most recent Score record for every symbol in storage.
+
+        Returns:
+            List of latest Score instances, sorted by total_points descending.
+        """
+        pass
+
+    @abstractmethod
+    def get_scores_for_symbol_in_range(
+        self, symbol: str, start_date: dt.date, end_date: dt.date
+    ) -> list[Score]:
+        """Retrieve scores for a specific symbol within a date window.
+
+        Args:
+            symbol: Ticker symbol.
+            start_date: Start date (inclusive).
+            end_date: End date (inclusive).
+
+        Returns:
+            List of Score records ordered chronologically.
+        """
+        pass

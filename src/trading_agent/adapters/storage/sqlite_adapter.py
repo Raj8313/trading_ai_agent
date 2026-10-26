@@ -8,8 +8,20 @@ import datetime as dt
 import json
 import logging
 import sqlite3
-from typing import Optional
+import time
+from typing import Callable, Optional, TypeVar
 
+from trading_agent.adapters.storage.schema import (
+    GET_ALL_SCORES_SQL,
+    GET_LATEST_SCORES_SQL,
+    GET_SCORE_COUNTS_SQL,
+    GET_SCORE_SQL,
+    GET_SCORES_IN_RANGE_SQL,
+    INIT_SCHEMA_SQL,
+    INSERT_DQI_SQL,
+    SCHEMA_VERSION,
+    UPSERT_SCORE_SQL,
+)
 from trading_agent.domain.models import (
     CheckResult,
     DataQualityIssue,
@@ -19,8 +31,13 @@ from trading_agent.domain.models import (
 from trading_agent.ports.storage import StoragePort
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
-SCHEMA_VERSION = 1
+
+class DatabaseBusyError(Exception):
+    """Raised when SQLite database remains locked after retries."""
+
+    pass
 
 
 class SqliteStorageAdapter(StoragePort):
@@ -43,16 +60,7 @@ class SqliteStorageAdapter(StoragePort):
     def _init_db(self) -> None:
         """Create versioned tables and indices if they do not exist."""
         with self._get_connection() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS schema_version (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL
-                );
-                """
-            )
-
-            # Record version 1 if not already applied
+            conn.executescript(INIT_SCHEMA_SQL)
             cursor = conn.execute("SELECT version FROM schema_version WHERE version = ?;", (SCHEMA_VERSION,))
             if not cursor.fetchone():
                 conn.execute(
@@ -60,67 +68,32 @@ class SqliteStorageAdapter(StoragePort):
                     (SCHEMA_VERSION, dt.datetime.now(dt.timezone.utc).isoformat()),
                 )
 
-            # Scores table: unique composite primary key on (symbol, date) guarantees idempotency
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS scores (
-                    symbol TEXT NOT NULL,
-                    date TEXT NOT NULL,
-                    total_points INTEGER NOT NULL,
-                    band TEXT NOT NULL,
-                    check_results_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY (symbol, date)
-                );
-                """
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_scores_symbol ON scores(symbol);")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_scores_date ON scores(date);")
-
-            # Data quality issues table
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS data_quality_issues (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    symbol TEXT NOT NULL,
-                    date TEXT,
-                    issue TEXT NOT NULL,
-                    recorded_at TEXT NOT NULL
-                );
-                """
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_dqi_symbol ON data_quality_issues(symbol);")
+    def _execute_read_query(self, query_fn: Callable[[], T]) -> T:
+        """Execute a read query function with retries on database lock/busy conditions."""
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return query_fn()
+            except sqlite3.OperationalError as exc:
+                err_str = str(exc).lower()
+                if "locked" in err_str or "busy" in err_str:
+                    logger.warning("Database locked/busy (attempt %d/%d): %s", attempt, max_attempts, exc)
+                    if attempt < max_attempts:
+                        time.sleep(1.0)
+                        continue
+                    raise DatabaseBusyError("Database busy — try again in a moment") from exc
+                raise
 
     def save_score(self, score: Score) -> None:
-        """Upsert a score record into SQLite.
-
-        Raises loudly on database errors.
-        """
+        """Upsert a score record into SQLite. Raises loudly on database errors."""
         checks_payload = json.dumps([c.model_dump() for c in score.check_results])
         now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
         date_str = score.date.isoformat()
-
-        sql = """
-            INSERT INTO scores (symbol, date, total_points, band, check_results_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(symbol, date) DO UPDATE SET
-                total_points = excluded.total_points,
-                band = excluded.band,
-                check_results_json = excluded.check_results_json,
-                created_at = excluded.created_at;
-        """
         try:
             with self._get_connection() as conn:
                 conn.execute(
-                    sql,
-                    (
-                        score.symbol,
-                        date_str,
-                        score.total_points,
-                        score.band.value,
-                        checks_payload,
-                        now_iso,
-                    ),
+                    UPSERT_SCORE_SQL,
+                    (score.symbol, date_str, score.total_points, score.band.value, checks_payload, now_iso),
                 )
         except Exception as e:
             logger.error("Failed to save score for %s on %s: %s", score.symbol, score.date, e)
@@ -128,63 +101,73 @@ class SqliteStorageAdapter(StoragePort):
 
     def get_score(self, symbol: str, date: dt.date) -> Optional[Score]:
         """Fetch score for a symbol on a specific date."""
-        sql = "SELECT symbol, date, total_points, band, check_results_json FROM scores WHERE symbol = ? AND date = ?;"
-        try:
+        def _query() -> Optional[Score]:
             with self._get_connection() as conn:
-                row = conn.execute(sql, (symbol, date.isoformat())).fetchone()
-                if not row:
-                    return None
-                return self._row_to_score(row)
-        except Exception as e:
-            logger.error("Failed to retrieve score for %s on %s: %s", symbol, date, e)
-            raise
+                row = conn.execute(GET_SCORE_SQL, (symbol, date.isoformat())).fetchone()
+                return self._row_to_score(row) if row else None
+
+        return self._execute_read_query(_query)
 
     def get_all_scores_for_symbol(self, symbol: str) -> list[Score]:
         """Fetch all scores for a symbol ordered by date ascending."""
-        sql = "SELECT symbol, date, total_points, band, check_results_json FROM scores WHERE symbol = ? ORDER BY date ASC;"
-        try:
+        def _query() -> list[Score]:
             with self._get_connection() as conn:
-                rows = conn.execute(sql, (symbol,)).fetchall()
+                rows = conn.execute(GET_ALL_SCORES_SQL, (symbol,)).fetchall()
                 return [self._row_to_score(r) for r in rows]
-        except Exception as e:
-            logger.error("Failed to retrieve all scores for %s: %s", symbol, e)
-            raise
+
+        return self._execute_read_query(_query)
 
     def get_score_counts_by_symbol(self) -> dict[str, int]:
         """Return the count of scores grouped by symbol."""
-        sql = "SELECT symbol, COUNT(*) as count FROM scores GROUP BY symbol ORDER BY symbol ASC;"
-        try:
+        def _query() -> dict[str, int]:
             with self._get_connection() as conn:
-                rows = conn.execute(sql).fetchall()
+                rows = conn.execute(GET_SCORE_COUNTS_SQL).fetchall()
                 return {row["symbol"]: row["count"] for row in rows}
-        except Exception as e:
-            logger.error("Failed to get score counts: %s", e)
-            raise
+
+        return self._execute_read_query(_query)
+
+    def get_latest_scores(self) -> list[Score]:
+        """Fetch the most recent score for each symbol in storage, ordered by total_points DESC."""
+        def _query() -> list[Score]:
+            with self._get_connection() as conn:
+                rows = conn.execute(GET_LATEST_SCORES_SQL).fetchall()
+                return [self._row_to_score(r) for r in rows]
+
+        return self._execute_read_query(_query)
+
+    def get_scores_for_symbol_in_range(
+        self, symbol: str, start_date: dt.date, end_date: dt.date
+    ) -> list[Score]:
+        """Fetch scores for a symbol within a date window ascending."""
+        def _query() -> list[Score]:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    GET_SCORES_IN_RANGE_SQL, (symbol, start_date.isoformat(), end_date.isoformat())
+                ).fetchall()
+                return [self._row_to_score(r) for r in rows]
+
+        return self._execute_read_query(_query)
 
     def save_data_quality_issue(self, issue: DataQualityIssue) -> None:
         """Persist a data quality issue record."""
-        sql = """
-            INSERT INTO data_quality_issues (symbol, date, issue, recorded_at)
-            VALUES (?, ?, ?, ?);
-        """
         date_str = issue.date.isoformat() if issue.date else None
         try:
             with self._get_connection() as conn:
-                conn.execute(sql, (issue.symbol, date_str, issue.issue, issue.recorded_at.isoformat()))
+                conn.execute(INSERT_DQI_SQL, (issue.symbol, date_str, issue.issue, issue.recorded_at.isoformat()))
         except Exception as e:
             logger.error("Failed to save data quality issue for %s: %s", issue.symbol, e)
             raise
 
     def get_data_quality_issues(self, symbol: Optional[str] = None) -> list[DataQualityIssue]:
-        """Fetch data quality issues, optionally filtered by symbol."""
+        """Fetch data quality issues, optionally filtered by symbol, most recent first."""
         if symbol:
-            sql = "SELECT symbol, date, issue, recorded_at FROM data_quality_issues WHERE symbol = ? ORDER BY id ASC;"
+            sql = "SELECT symbol, date, issue, recorded_at FROM data_quality_issues WHERE symbol = ? ORDER BY id DESC;"
             params = (symbol,)
         else:
-            sql = "SELECT symbol, date, issue, recorded_at FROM data_quality_issues ORDER BY id ASC;"
+            sql = "SELECT symbol, date, issue, recorded_at FROM data_quality_issues ORDER BY id DESC;"
             params = ()
 
-        try:
+        def _query() -> list[DataQualityIssue]:
             with self._get_connection() as conn:
                 rows = conn.execute(sql, params).fetchall()
                 results = []
@@ -199,9 +182,8 @@ class SqliteStorageAdapter(StoragePort):
                         )
                     )
                 return results
-        except Exception as e:
-            logger.error("Failed to fetch data quality issues: %s", e)
-            raise
+
+        return self._execute_read_query(_query)
 
     @staticmethod
     def _row_to_score(row: sqlite3.Row) -> Score:

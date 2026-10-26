@@ -125,6 +125,17 @@ ACTION:       🟡 BUY (HALF POSITION)
 =======================================================
 ```
 
+### 3. Launch Read-Only Dashboard
+Launch the interactive browser dashboard with a single command to view latest watchlist scores, 12-month score charts, and data quality logs:
+
+```bash
+uv run dashboard
+```
+
+- **Page 1 (Overview)**: Watchlist table with latest scores, colored band badges (🟢 $\ge 80$, 🟡 $60\text{--}79$, 🔴 $< 60$), and individual check pass/fail indicators.
+- **Page 2 (Symbol Detail)**: Interactive 12-month score history line chart with threshold lines + check rationale breakdown.
+- **Page 3 (Data Quality)**: Audit log of any feed anomalies, empty bars, or skipped records.
+
 ---
 
 ## 🧩 Adding a New Check (Open-Closed Principle)

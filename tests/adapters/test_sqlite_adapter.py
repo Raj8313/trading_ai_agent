@@ -131,3 +131,56 @@ def test_sqlite_failure_raises_loudly(tmp_path):
     score = make_test_score("FAIL.NS", dt.date(2024, 1, 1), 50)
     with pytest.raises(Exception):
         adapter.save_score(score)
+
+
+def test_get_latest_scores(storage):
+    """Verify retrieving the latest score for each symbol."""
+    # TCS: 2 dates
+    storage.save_score(make_test_score("TCS.NS", dt.date(2024, 1, 10), 30))
+    storage.save_score(make_test_score("TCS.NS", dt.date(2024, 1, 15), 65))
+
+    # INFY: 2 dates
+    storage.save_score(make_test_score("INFY.NS", dt.date(2024, 1, 12), 40))
+    storage.save_score(make_test_score("INFY.NS", dt.date(2024, 1, 16), 55))
+
+    latest = storage.get_latest_scores()
+    assert len(latest) == 2
+    # Sorted by total_points DESC: TCS (65) then INFY (55)
+    assert latest[0].symbol == "TCS.NS"
+    assert latest[0].date == dt.date(2024, 1, 15)
+    assert latest[0].total_points == 65
+
+    assert latest[1].symbol == "INFY.NS"
+    assert latest[1].date == dt.date(2024, 1, 16)
+    assert latest[1].total_points == 55
+
+
+def test_get_scores_for_symbol_in_range(storage):
+    """Verify querying scores within a date window."""
+    storage.save_score(make_test_score("RELIANCE.NS", dt.date(2024, 1, 5), 20))
+    storage.save_score(make_test_score("RELIANCE.NS", dt.date(2024, 1, 10), 40))
+    storage.save_score(make_test_score("RELIANCE.NS", dt.date(2024, 1, 15), 60))
+    storage.save_score(make_test_score("RELIANCE.NS", dt.date(2024, 1, 20), 80))
+
+    # Range: 2024-01-08 to 2024-01-16
+    in_range = storage.get_scores_for_symbol_in_range(
+        "RELIANCE.NS", dt.date(2024, 1, 8), dt.date(2024, 1, 16)
+    )
+    assert len(in_range) == 2
+    assert in_range[0].date == dt.date(2024, 1, 10)
+    assert in_range[1].date == dt.date(2024, 1, 15)
+
+
+def test_database_busy_error_raised():
+    """Verify DatabaseBusyError is raised when operational error contains locked."""
+    from trading_agent.adapters.storage import DatabaseBusyError
+    import sqlite3
+
+    adapter = SqliteStorageAdapter(":memory:")
+    # Mock query_fn to always raise sqlite3.OperationalError: database is locked
+    def mock_query():
+        raise sqlite3.OperationalError("database is locked")
+
+    with pytest.raises(DatabaseBusyError) as exc_info:
+        adapter._execute_read_query(mock_query)
+    assert "Database busy" in str(exc_info.value)

@@ -10,6 +10,7 @@ dependencies = [
     "pandas>=2.2.0",
     "yfinance>=0.2.38",
     "requests>=2.31.0",
+    "streamlit>=1.66.1",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +23,7 @@ dev = [
 backfill = "trading_agent.cli:backfill_cli"
 score = "trading_agent.cli:score_cli"
 trading-agent = "trading_agent.cli:main_cli"
+dashboard = "trading_agent.dashboard.runner:run_dashboard"
 
 [build-system]
 requires = ["hatchling"]
