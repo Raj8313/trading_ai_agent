@@ -160,9 +160,9 @@ Adjust → give each check more/less points
 
 ## 8. Build Roadmap
 
-- [ ] **Step 1:** Install Python + VS Code; learn to pull NIFTY/stock data with yfinance
-- [ ] **Step 2:** Code the confidence meter (3 checks) — plain Python, no broker
-- [ ] **Step 3:** SQLite logging of every signal + Telegram alerts
+- [x] **Step 1:** Install Python + VS Code; learn to pull NIFTY/stock data with yfinance (Completed in Phase 1)
+- [x] **Step 2:** Code the confidence meter (3 checks) — plain Python, no broker (Completed in Phase 1)
+- [x] **Step 3:** SQLite logging of every signal + Telegram alerts (Completed in Phase 1)
 - [ ] **Step 4:** Pre-market module Stage 1 (GIFT Nifty + US close + event calendar)
 - [ ] **Step 5:** 1 month of paper trading → collect 30+ logged signals
 - [ ] **Step 6:** Level-2 learning: auto-stats on your logs; tighten thresholds
