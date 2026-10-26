@@ -9,24 +9,31 @@ import json
 import logging
 import sqlite3
 import time
-from typing import Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
 from trading_agent.adapters.storage.schema import (
     GET_ALL_SCORES_SQL,
+    GET_BACKTEST_RUN_COUNT_BY_HASH_SQL,
+    GET_BACKTEST_RUN_SQL,
     GET_LATEST_SCORES_SQL,
     GET_SCORE_COUNTS_SQL,
     GET_SCORE_SQL,
     GET_SCORES_IN_RANGE_SQL,
+    GET_TRADES_BY_RUN_ID_SQL,
     INIT_SCHEMA_SQL,
+    INSERT_BACKTEST_RUN_SQL,
     INSERT_DQI_SQL,
+    INSERT_TRADE_SQL,
     SCHEMA_VERSION,
     UPSERT_SCORE_SQL,
 )
 from trading_agent.domain.models import (
     CheckResult,
     DataQualityIssue,
+    ExitReason,
     Score,
     TradeBand,
+    TradeRecord,
 )
 from trading_agent.ports.storage import StoragePort
 
@@ -197,3 +204,88 @@ class SqliteStorageAdapter(StoragePort):
             total_points=row["total_points"],
             band=TradeBand(row["band"]),
         )
+
+    def save_backtest_run(
+        self,
+        run_id: str,
+        started_at: dt.datetime,
+        params: dict[str, Any],
+        config_hash: str,
+        metrics: dict[str, Any],
+        trades: list[TradeRecord],
+        version: int = 1,
+    ) -> str:
+        """Persist a completed backtest run and its trades atomically."""
+        params_json = json.dumps(params, default=str)
+        metrics_json = json.dumps(metrics, default=str)
+        trade_rows = [
+            (
+                run_id, t.symbol, t.signal_date.isoformat(), t.entry_date.isoformat(),
+                t.entry_price, t.exit_date.isoformat(), t.exit_price, t.exit_reason.value,
+                t.band.value, t.position_size, t.gross_pnl, t.net_pnl, 1 if t.rule_followed else 0,
+            )
+            for t in trades
+        ]
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    INSERT_BACKTEST_RUN_SQL,
+                    (run_id, version, started_at.isoformat(), params_json, config_hash, metrics_json),
+                )
+                conn.executemany(INSERT_TRADE_SQL, trade_rows)
+            return run_id
+        except Exception as e:
+            logger.error("Failed to save backtest run %s: %s", run_id, e)
+            raise
+
+    def get_backtest_run(self, run_id: str) -> Optional[dict[str, Any]]:
+        """Fetch backtest run by id."""
+        def _query() -> Optional[dict[str, Any]]:
+            with self._get_connection() as conn:
+                row = conn.execute(GET_BACKTEST_RUN_SQL, (run_id,)).fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row["id"],
+                    "version": row["version"],
+                    "started_at": dt.datetime.fromisoformat(row["started_at"]),
+                    "params": json.loads(row["params_json"]),
+                    "config_hash": row["config_hash"],
+                    "metrics": json.loads(row["metrics_json"]),
+                }
+
+        return self._execute_read_query(_query)
+
+    def get_backtest_trades(self, run_id: str) -> list[TradeRecord]:
+        """Fetch all trades for a backtest run ordered by exit date."""
+        def _query() -> list[TradeRecord]:
+            with self._get_connection() as conn:
+                rows = conn.execute(GET_TRADES_BY_RUN_ID_SQL, (run_id,)).fetchall()
+                return [
+                    TradeRecord(
+                        symbol=r["symbol"],
+                        signal_date=dt.date.fromisoformat(r["signal_date"]),
+                        entry_date=dt.date.fromisoformat(r["entry_date"]),
+                        entry_price=r["entry_price"],
+                        exit_date=dt.date.fromisoformat(r["exit_date"]),
+                        exit_price=r["exit_price"],
+                        exit_reason=ExitReason(r["exit_reason"]),
+                        band=TradeBand(r["band"]),
+                        position_size=r["position_size"],
+                        gross_pnl=r["gross_pnl"],
+                        net_pnl=r["net_pnl"],
+                        rule_followed=bool(r["rule_followed"]),
+                    )
+                    for r in rows
+                ]
+
+        return self._execute_read_query(_query)
+
+    def get_backtest_run_count(self, config_hash: str) -> int:
+        """Fetch count of existing runs for a config hash."""
+        def _query() -> int:
+            with self._get_connection() as conn:
+                row = conn.execute(GET_BACKTEST_RUN_COUNT_BY_HASH_SQL, (config_hash,)).fetchone()
+                return int(row[0]) if row else 0
+
+        return self._execute_read_query(_query)

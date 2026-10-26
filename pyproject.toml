@@ -24,6 +24,7 @@ backfill = "trading_agent.cli:backfill_cli"
 score = "trading_agent.cli:score_cli"
 trading-agent = "trading_agent.cli:main_cli"
 dashboard = "trading_agent.dashboard.runner:run_dashboard"
+backtest = "trading_agent.backtest.cli:backtest_cli"
 
 [build-system]
 requires = ["hatchling"]

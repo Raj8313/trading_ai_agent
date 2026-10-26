@@ -160,14 +160,13 @@ Adjust → give each check more/less points
 
 ## 8. Build Roadmap
 
-- [x] **Step 1:** Install Python + VS Code; learn to pull NIFTY/stock data with yfinance (Completed in Phase 1)
-- [x] **Step 2:** Code the confidence meter (3 checks) — plain Python, no broker (Completed in Phase 1)
-- [x] **Step 3:** SQLite logging of every signal + Telegram alerts (Completed in Phase 1)
-- [ ] **Step 4:** Pre-market module Stage 1 (GIFT Nifty + US close + event calendar)
-- [ ] **Step 5:** 1 month of paper trading → collect 30+ logged signals
-- [ ] **Step 6:** Level-2 learning: auto-stats on your logs; tighten thresholds
-- [ ] **Step 7:** 3–6 months consistently profitable on paper → decide on going live
-- [ ] **Step 8 (only then):** Broker API + static IP + ₹5–10k real capital, under SEBI's framework
+- [x] **Phase 1:** Foundation & Signal Engine — Ports & Adapters, Confidence Meter v0 (3 checks), SQLite in WAL mode, Telegram alerts, CLI `backfill` & `score`
+- [x] **Phase 1.5:** Read-Only Dashboard — Streamlit browser UI (Overview, Symbol Detail charts, Data Quality logs)
+- [x] **Phase 2:** Backtesting & Validation — Historical backtest engine, lookahead guard, conservative execution physics, metrics & NIFTY benchmark baseline comparison, CLI `backtest`
+- [ ] **Phase 3:** Pre-market sentiment module (GIFT Nifty + US close + event calendar)
+- [ ] **Phase 4:** Paper trading execution loop (9:15 AM – 3:30 PM real-time shadow trading)
+- [ ] **Phase 5:** Feedback & Continuous Learning loop (auto-stats, rule-followed vs broken tags, threshold adjustment)
+- [ ] **Phase 6:** Broker API integration (under SEBI algorithmic trading guidelines)
 
 ---
 

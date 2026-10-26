@@ -1,17 +1,14 @@
-# 🤖 Personal AI Trading Agent — Phase 1: Foundation & Signal Engine
+# 🤖 Personal AI Trading Agent
 
 Welcome to the **Personal AI Trading Agent**! This project is an auditable, deterministic, paper-trading-first trading agent designed for Indian equity cash markets (NSE) built for ₹0 running entirely on your local machine.
 
 ---
 
-## 📌 Phase 1 Goal
+## 📌 Capabilities & Completed Phases
 
-Phase 1 establishes the rock-solid modular foundation:
-- **Clean Architecture (Ports & Adapters)**: Business logic is decoupled from external tools, databases, and APIs.
-- **Auditable Confidence Meter (v0)**: Scores daily stock price action across **3 transparent checks** (Max 65 points in Phase 1).
-- **SQLite Storage in WAL mode**: Fully idempotent persistence of scores and data quality anomalies.
-- **Multi-channel Notifier**: Console alerts by default with optional Telegram integration.
-- **Zero Real Money**: Signals and logs only; no broker connections or order execution.
+- **Phase 1 — Foundation & Signal Engine**: Clean Architecture (Ports & Adapters), SQLite WAL storage, Console/Telegram notifiers, and an auditable Confidence Meter (Trend, Volume, Market Direction checks).
+- **Phase 1.5 — Read-Only Dashboard**: Streamlit browser dashboard visualizing live watchlist confidence badges, 12-month historical score charts, and data quality logs.
+- **Phase 2 — Backtesting & Validation**: Chronological historical simulator with conservative execution physics (strict $D+1$ open entry, lookahead guard, intrabar stop-loss priority, gap-through-stop realistic losses, max 3 concurrent positions, mandatory statutory charges and slippage) and baseline comparison against NIFTY 50 buy-and-hold.
 
 ---
 
@@ -135,6 +132,32 @@ uv run dashboard
 - **Page 1 (Overview)**: Watchlist table with latest scores, colored band badges (🟢 $\ge 80$, 🟡 $60\text{--}79$, 🔴 $< 60$), and individual check pass/fail indicators.
 - **Page 2 (Symbol Detail)**: Interactive 12-month score history line chart with threshold lines + check rationale breakdown.
 - **Page 3 (Data Quality)**: Audit log of any feed anomalies, empty bars, or skipped records.
+
+### 4. Run Backtesting & Validation Simulation (Phase 2)
+Run historical simulation over persisted confidence scores to test whether signals would have made money after all realistic statutory charges and slippage:
+
+```bash
+uv run backtest --start 2025-09-01 --end 2026-10-20 --export trades.csv
+```
+
+#### Understanding the Backtest Report (Beginner's Guide)
+
+Trading beginners often fixate on **Win Rate**, but in systematic trading, win rate alone can be deceiving:
+1. **Expectancy (Expected Value per Trade)**:
+   - *Formula*: $(\text{Win Rate} \times \text{Avg Win}) - (\text{Loss Rate} \times \text{Avg Loss})$
+   - Tells you how many rupees you make or lose on average every time you enter a trade.
+   - A 90% win rate strategy that wins ₹100 but loses ₹2,000 on the 10th trade has negative expectancy and will eventually lose capital. Conversely, a 35% win rate strategy with ₹3,000 avg win and ₹1,000 avg loss is consistently profitable.
+2. **Maximum Drawdown (Peak-to-Trough Drop)**:
+   - Measures the deepest painful dip your account experiences before recovering.
+   - Even a profitable strategy cannot be traded if its drawdown exceeds what you can psychologically or financially endure.
+3. **Mandatory Realistic Costs**:
+   - The engine automatically deducts **0.1% round-trip statutory costs** (STT, stamp duty, exchange turnover charges) + **0.05% slippage per side** (~0.2% round-trip total drag).
+4. **Baseline Comparison (NIFTY 50)**:
+   - Compares the strategy's return against passively holding NIFTY 50 over the exact same period to evaluate whether active trading provided real value (alpha).
+5. **Sample Size & Statistical Honesty**:
+   - The report automatically alerts you if total completed trades are $< 30$: small sample sizes cannot provide statistically definitive proof.
+6. **No Silent Duplication**:
+   - Every backtest execution computes a configuration hash and saves versioned records (`v1`, `v2`, ...) in SQLite without corrupting or duplicating trade logs.
 
 ---
 

@@ -2,8 +2,8 @@
 
 from abc import ABC, abstractmethod
 import datetime as dt
-from typing import Optional
-from trading_agent.domain.models import DataQualityIssue, Score
+from typing import Any, Optional
+from trading_agent.domain.models import DataQualityIssue, Score, TradeRecord
 
 
 class StoragePort(ABC):
@@ -100,5 +100,68 @@ class StoragePort(ABC):
 
         Returns:
             List of Score records ordered chronologically.
+        """
+        pass
+
+    @abstractmethod
+    def save_backtest_run(
+        self,
+        run_id: str,
+        started_at: dt.datetime,
+        params: dict[str, Any],
+        config_hash: str,
+        metrics: dict[str, Any],
+        trades: list[TradeRecord],
+        version: int = 1,
+    ) -> str:
+        """Persist a completed backtest run and its associated trades.
+
+        Args:
+            run_id: Unique identifier for the run.
+            started_at: Timestamp when backtest was initiated.
+            params: Run parameters (e.g. date range, symbols, capital).
+            config_hash: Hash identifying the backtest configuration.
+            metrics: Computed performance summary dictionary.
+            trades: List of executed TradeRecord entities.
+            version: Incremental version for this configuration hash.
+
+        Returns:
+            The run_id under which the record was stored.
+        """
+        pass
+
+    @abstractmethod
+    def get_backtest_run(self, run_id: str) -> Optional[dict[str, Any]]:
+        """Retrieve metadata and metrics for a specific backtest run.
+
+        Args:
+            run_id: Unique run identifier.
+
+        Returns:
+            Run record dict if found, else None.
+        """
+        pass
+
+    @abstractmethod
+    def get_backtest_trades(self, run_id: str) -> list[TradeRecord]:
+        """Retrieve all trade records belonging to a backtest run.
+
+        Args:
+            run_id: Unique run identifier.
+
+        Returns:
+            List of TradeRecord entities ordered chronologically by exit date.
+        """
+        pass
+
+    @abstractmethod
+    def get_backtest_run_count(self, config_hash: str) -> int:
+        """Return count of existing runs with the given configuration hash.
+
+        Args:
+            config_hash: Hash string identifying the configuration.
+
+        Returns:
+            Count of existing runs.
         """
         pass

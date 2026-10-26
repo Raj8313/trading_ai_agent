@@ -6,8 +6,10 @@ from trading_agent.adapters.storage.sqlite_adapter import SqliteStorageAdapter
 from trading_agent.domain.models import (
     CheckResult,
     DataQualityIssue,
+    ExitReason,
     Score,
     TradeBand,
+    TradeRecord,
 )
 
 
@@ -184,3 +186,110 @@ def test_database_busy_error_raised():
     with pytest.raises(DatabaseBusyError) as exc_info:
         adapter._execute_read_query(mock_query)
     assert "Database busy" in str(exc_info.value)
+
+
+def test_save_and_get_backtest_run_and_trades(storage):
+    """Verify persisting and querying backtest runs and associated trades."""
+    trade = TradeRecord(
+        symbol="RELIANCE.NS",
+        signal_date=dt.date(2024, 1, 10),
+        entry_date=dt.date(2024, 1, 11),
+        entry_price=2500.0,
+        exit_date=dt.date(2024, 1, 15),
+        exit_price=2600.0,
+        exit_reason=ExitReason.TARGET,
+        band=TradeBand.FULL,
+        position_size=100000.0,
+        gross_pnl=4000.0,
+        net_pnl=3750.0,
+        rule_followed=True,
+    )
+    run_id = "test_run_123"
+    params = {"start": "2024-01-01", "end": "2024-01-20"}
+    metrics = {"win_rate_pct": 100.0, "net_pnl": 3750.0}
+
+    storage.save_backtest_run(
+        run_id=run_id,
+        started_at=dt.datetime(2024, 1, 20, 10, 0, tzinfo=dt.timezone.utc),
+        params=params,
+        config_hash="abc_hash",
+        metrics=metrics,
+        trades=[trade],
+        version=1,
+    )
+
+    run = storage.get_backtest_run(run_id)
+    assert run is not None
+    assert run["id"] == run_id
+    assert run["version"] == 1
+    assert run["config_hash"] == "abc_hash"
+    assert run["params"] == params
+    assert run["metrics"] == metrics
+
+    trades = storage.get_backtest_trades(run_id)
+    assert len(trades) == 1
+    assert trades[0].symbol == "RELIANCE.NS"
+    assert trades[0].net_pnl == 3750.0
+    assert trades[0].exit_reason == ExitReason.TARGET
+
+
+def test_backtest_run_versioning_and_no_duplicate_trades(storage):
+    """Verify incremented run versions for identical config and refusal to overwrite existing run_id."""
+    config_hash = "conf_hash_xyz"
+    assert storage.get_backtest_run_count(config_hash) == 0
+
+    trade1 = TradeRecord(
+        symbol="TCS.NS",
+        signal_date=dt.date(2024, 2, 1),
+        entry_date=dt.date(2024, 2, 2),
+        entry_price=3500.0,
+        exit_date=dt.date(2024, 2, 5),
+        exit_price=3570.0,
+        exit_reason=ExitReason.TARGET,
+        band=TradeBand.HALF,
+        position_size=50000.0,
+        gross_pnl=1000.0,
+        net_pnl=900.0,
+    )
+
+    # First run version 1
+    storage.save_backtest_run(
+        run_id=f"{config_hash}_v1",
+        started_at=dt.datetime.now(dt.timezone.utc),
+        params={"window": "30d"},
+        config_hash=config_hash,
+        metrics={"total_trades": 1},
+        trades=[trade1],
+        version=1,
+    )
+    assert storage.get_backtest_run_count(config_hash) == 1
+
+    # Second run with version 2
+    count = storage.get_backtest_run_count(config_hash)
+    version = count + 1
+    storage.save_backtest_run(
+        run_id=f"{config_hash}_v{version}",
+        started_at=dt.datetime.now(dt.timezone.utc),
+        params={"window": "30d"},
+        config_hash=config_hash,
+        metrics={"total_trades": 1},
+        trades=[trade1],
+        version=version,
+    )
+    assert storage.get_backtest_run_count(config_hash) == 2
+
+    # Trades for v1 belong strictly to v1 (no cross-contamination or duplication)
+    assert len(storage.get_backtest_trades(f"{config_hash}_v1")) == 1
+    assert len(storage.get_backtest_trades(f"{config_hash}_v2")) == 1
+
+    # Overwriting existing run_id raises error (no silent duplicate rows)
+    with pytest.raises(Exception):
+        storage.save_backtest_run(
+            run_id=f"{config_hash}_v1",
+            started_at=dt.datetime.now(dt.timezone.utc),
+            params={"window": "30d"},
+            config_hash=config_hash,
+            metrics={},
+            trades=[],
+            version=1,
+        )

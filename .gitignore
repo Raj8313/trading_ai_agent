@@ -21,6 +21,7 @@ htmlcov/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+*.csv
 logs/
 
 # Ideas (User notes - ignored by trading agent)
