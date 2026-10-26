@@ -8,6 +8,7 @@ import argparse
 import datetime as dt
 import logging
 import sys
+import time
 from typing import Optional
 
 from trading_agent.adapters.market_data.yfinance_adapter import (
@@ -18,6 +19,8 @@ from trading_agent.adapters.notifier.telegram_adapter import TelegramNotifierAda
 from trading_agent.adapters.storage.sqlite_adapter import SqliteStorageAdapter
 from trading_agent.config import get_settings
 from trading_agent.domain.models import Score
+from trading_agent.strategy.checks.not_at_high_check import NotAtHighCheck
+from trading_agent.strategy.checks.stop_distance_check import StopDistanceCheck
 from trading_agent.strategy.meter import ConfidenceMeter
 
 logging.basicConfig(
@@ -28,18 +31,22 @@ logger = logging.getLogger("trading_agent.cli")
 
 
 def run_backfill(
-    days: int = 365,
+    days: Optional[int] = None,
+    years: Optional[int] = None,
     watchlist: Optional[list[str]] = None,
     benchmark_symbol: Optional[str] = None,
     db_path: Optional[str] = None,
+    meter_version: str = "v2",
 ) -> int:
     """Execute historical backfill for watchlist and benchmark symbols.
 
     Args:
-        days: Number of historical days to fetch (defaults to ~1 year).
+        days: Number of historical days to fetch (defaults to backfill_years * 365).
+        years: Number of historical years to fetch.
         watchlist: Symbols to backfill.
         benchmark_symbol: Benchmark market symbol (default ^NSEI).
         db_path: SQLite database file path.
+        meter_version: Confidence meter version (default v2).
 
     Returns:
         0 on success, non-zero if any symbol failed.
@@ -49,28 +56,38 @@ def run_backfill(
     symbols = watchlist or settings.watchlist
     bench_symbol = benchmark_symbol or settings.benchmark_symbol
 
+    if years is not None:
+        total_days = int(years * 365)
+    elif days is not None:
+        total_days = days
+    else:
+        total_days = int(settings.backfill_years * 365)
+
     storage = SqliteStorageAdapter(db_path=target_db)
     notifier = TelegramNotifierAdapter(
         bot_token=settings.telegram_bot_token,
         chat_id=settings.telegram_chat_id,
     )
     market_data = YFinanceMarketDataAdapter(storage_adapter=storage)
+
+    # Configure meter according to requested version
     meter = ConfidenceMeter()
+    if meter_version == "v2":
+        meter.register_check(NotAtHighCheck())
+        meter.register_check(StopDistanceCheck(stop_loss_pct=settings.stop_loss_pct))
 
     today = dt.date.today()
-    # Fetch extra calendar buffer days so we ensure a full year of trading sessions (~250 trading days)
-    start_date = today - dt.timedelta(days=int(days * 1.25))
+    start_date = today - dt.timedelta(days=int(total_days * 1.25))
 
     print(f"\n=======================================================")
-    print(f"🚀 STARTING HISTORICAL BACKFILL ({days} days)")
+    print(f"🚀 STARTING HISTORICAL BACKFILL ({total_days} days, Meter {meter_version})")
     print(f"   Database:  {target_db}")
     print(f"   Benchmark: {bench_symbol}")
-    print(f"   Watchlist: {', '.join(symbols)}")
+    print(f"   Watchlist: {len(symbols)} symbols")
     print(f"=======================================================\n")
 
     failed_symbols: list[str] = []
 
-    # 1. Fetch benchmark data first
     print(f"Fetching benchmark data for {bench_symbol}...")
     try:
         benchmark_bars = market_data.fetch_daily_bars(bench_symbol, start_date, today)
@@ -81,7 +98,6 @@ def run_backfill(
         failed_symbols.append(bench_symbol)
         benchmark_bars = []
 
-    # All targets to score: watchlist symbols + benchmark index itself
     all_targets = list(symbols)
     if bench_symbol not in all_targets:
         all_targets.append(bench_symbol)
@@ -89,24 +105,21 @@ def run_backfill(
     for symbol in all_targets:
         print(f"\nProcessing {symbol}...")
         try:
-            if symbol == bench_symbol and benchmark_bars:
-                bars = benchmark_bars
-            else:
-                bars = market_data.fetch_daily_bars(symbol, start_date, today)
-
+            bars = benchmark_bars if (symbol == bench_symbol and benchmark_bars) else market_data.fetch_daily_bars(symbol, start_date, today)
             if not bars:
                 print(f"  ⚠ {symbol}: No bar data returned. Skipping scoring.")
                 continue
 
-            print(f"  ✓ {symbol}: {len(bars)} daily bars. Computing scores bar-by-bar...")
+            existing_dates = storage.get_scored_dates_for_symbol(symbol, meter_version=meter_version)
+            scored_count, skipped_count = 0, 0
 
-            # Score each bar starting from period index 20 (where 20 prior bars exist)
-            scored_count = 0
             for idx in range(20, len(bars)):
                 target_date = bars[idx].date
-                stock_history = bars[: idx + 1]
+                if target_date in existing_dates:
+                    skipped_count += 1
+                    continue
 
-                # Market bars up to target_date
+                stock_history = bars[: idx + 1]
                 mkt_history = [b for b in benchmark_bars if b.date <= target_date]
 
                 score = meter.calculate_score(
@@ -115,10 +128,13 @@ def run_backfill(
                     bars=stock_history,
                     market_bars=mkt_history,
                 )
+                score.meter_version = meter_version
                 storage.save_score(score)
                 scored_count += 1
 
-            print(f"  ✓ {symbol}: Persisted {scored_count} scores to SQLite.")
+            print(f"  ✓ {symbol}: Scored {scored_count} new bars (skipped {skipped_count} existing).")
+            if scored_count > 0:
+                time.sleep(0.3)
 
         except MarketDataFetchError as exc:
             logger.error("Error processing %s: %s", symbol, exc)
@@ -129,21 +145,18 @@ def run_backfill(
             print(f"  ✗ {symbol}: Unexpected error: {exc}")
             failed_symbols.append(symbol)
 
-    # Print summary table
     print("\n=======================================================")
-    print("📊 BACKFILL SUMMARY — ROW COUNTS IN SQLITE")
+    print(f"📊 BACKFILL SUMMARY ({meter_version}) — ROW COUNTS IN SQLITE")
     print("=======================================================")
-    counts = storage.get_score_counts_by_symbol()
-    total_stored = 0
+    counts = storage.get_score_counts_by_symbol(meter_version=meter_version)
+    total_stored = sum(counts.values())
     for sym in sorted(counts.keys()):
-        count = counts[sym]
-        total_stored += count
-        print(f"  • {sym:<16} : {count:>5} scored bars")
+        print(f"  • {sym:<16} : {counts[sym]:>5} scored bars")
     print("-------------------------------------------------------")
     print(f"  Total Scored Rows: {total_stored}")
     print("=======================================================\n")
 
-    summary_msg = f"Backfill finished: {total_stored} scores persisted across {len(counts)} symbols."
+    summary_msg = f"Backfill finished: {total_stored} {meter_version} scores persisted across {len(counts)} symbols."
     if failed_symbols:
         summary_msg += f" (Failures: {', '.join(failed_symbols)})"
     notifier.send_notification(summary_msg)
@@ -187,7 +200,9 @@ def run_score(symbol: str, date_str: str, db_path: Optional[str] = None) -> int:
     score: Optional[Score] = None
     matched_symbol: str = symbol
     for cand in candidates:
-        score = storage.get_score(cand, target_date)
+        score = storage.get_score(cand, target_date, meter_version="v2")
+        if not score:
+            score = storage.get_score(cand, target_date, meter_version="v1")
         if score:
             matched_symbol = cand
             break
@@ -200,8 +215,9 @@ def run_score(symbol: str, date_str: str, db_path: Optional[str] = None) -> int:
 
     print(f"\n=======================================================")
     print(f"🎯 CONFIDENCE METER SCORE BREAKDOWN")
-    print(f"   Symbol: {matched_symbol}")
-    print(f"   Date:   {score.date.isoformat()}")
+    print(f"   Symbol:  {matched_symbol}")
+    print(f"   Date:    {score.date.isoformat()}")
+    print(f"   Version: {score.meter_version}")
     print(f"=======================================================")
     for check in score.check_results:
         status = "✅ PASS" if check.passed else "❌ FAIL"
@@ -209,8 +225,9 @@ def run_score(symbol: str, date_str: str, db_path: Optional[str] = None) -> int:
         print(f"  Points:    +{check.points_awarded} / {check.max_points}")
         print(f"  Rationale: {check.rationale}")
 
+    max_pts = sum(c.max_points for c in score.check_results) if score.check_results else 100
     print("\n-------------------------------------------------------")
-    print(f"TOTAL POINTS: {score.total_points} / 65")
+    print(f"TOTAL POINTS: {score.total_points} / {max_pts}")
     print(f"TRADE BAND:   {score.band.value}")
     if score.band.value == "FULL":
         action = "🟢 BUY (FULL POSITION)"
@@ -226,10 +243,11 @@ def run_score(symbol: str, date_str: str, db_path: Optional[str] = None) -> int:
 def backfill_cli() -> None:
     """Entry point for standalone `backfill` command."""
     parser = argparse.ArgumentParser(description="Backfill historical daily scores into SQLite.")
-    parser.add_argument("--days", type=int, default=365, help="Number of historical days to fetch (default: 365)")
+    parser.add_argument("--days", type=int, default=None, help="Number of historical days to fetch")
+    parser.add_argument("--years", type=int, default=None, help="Number of historical years to fetch (default: 5)")
     parser.add_argument("--db", type=str, default=None, help="Custom SQLite database file path")
     args = parser.parse_args()
-    exit_code = run_backfill(days=args.days, db_path=args.db)
+    exit_code = run_backfill(days=args.days, years=args.years, db_path=args.db)
     sys.exit(exit_code)
 
 
@@ -249,12 +267,11 @@ def main_cli() -> None:
     parser = argparse.ArgumentParser(description="Personal AI Trading Agent CLI.")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    # backfill subcommand
     bf_parser = subparsers.add_parser("backfill", help="Backfill historical data and calculate scores.")
-    bf_parser.add_argument("--days", type=int, default=365, help="Days of history to backfill (default: 365)")
+    bf_parser.add_argument("--days", type=int, default=None, help="Days of history to backfill")
+    bf_parser.add_argument("--years", type=int, default=None, help="Years of history to backfill (default: 5)")
     bf_parser.add_argument("--db", type=str, default=None, help="Custom SQLite database file path")
 
-    # score subcommand
     sc_parser = subparsers.add_parser("score", help="Print score breakdown for a symbol on a date.")
     sc_parser.add_argument("symbol", type=str, help="Stock ticker symbol")
     sc_parser.add_argument("date", type=str, help="Date (YYYY-MM-DD)")
@@ -262,6 +279,6 @@ def main_cli() -> None:
 
     args = parser.parse_args()
     if args.subcommand == "backfill":
-        sys.exit(run_backfill(days=args.days, db_path=args.db))
+        sys.exit(run_backfill(days=args.days, years=args.years, db_path=args.db))
     elif args.subcommand == "score":
         sys.exit(run_score(symbol=args.symbol, date_str=args.date, db_path=args.db))

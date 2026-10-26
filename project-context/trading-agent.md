@@ -163,10 +163,11 @@ Adjust → give each check more/less points
 - [x] **Phase 1:** Foundation & Signal Engine — Ports & Adapters, Confidence Meter v0 (3 checks), SQLite in WAL mode, Telegram alerts, CLI `backfill` & `score`
 - [x] **Phase 1.5:** Read-Only Dashboard — Streamlit browser UI (Overview, Symbol Detail charts, Data Quality logs)
 - [x] **Phase 2:** Backtesting & Validation — Historical backtest engine, lookahead guard, conservative execution physics, metrics & NIFTY benchmark baseline comparison, CLI `backtest`
-- [ ] **Phase 3:** Pre-market sentiment module (GIFT Nifty + US close + event calendar)
-- [ ] **Phase 4:** Paper trading execution loop (9:15 AM – 3:30 PM real-time shadow trading)
-- [ ] **Phase 5:** Feedback & Continuous Learning loop (auto-stats, rule-followed vs broken tags, threshold adjustment)
-- [ ] **Phase 6:** Broker API integration (under SEBI algorithmic trading guidelines)
+- [x] **Phase 3:** Data Expansion & Full 5-Check Meter — 20 liquid NSE large-caps, 5-year incremental backfill, 5-check Confidence Meter reaching 100 pts (`NotAtHighCheck` + `StopDistanceCheck`), score versioning (`v1` and `v2`), 756-trade 5-year backtest against NIFTY baseline
+- [ ] **Phase 4:** Pre-market sentiment module (GIFT Nifty + US close + event calendar)
+- [ ] **Phase 5:** Paper trading execution loop (9:15 AM – 3:30 PM real-time shadow trading)
+- [ ] **Phase 6:** Feedback & Continuous Learning loop (auto-stats, rule-followed vs broken tags, threshold adjustment)
+- [ ] **Phase 7:** Broker API integration (under SEBI algorithmic trading guidelines)
 
 ---
 

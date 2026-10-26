@@ -114,7 +114,7 @@ def test_run_score_success(tmp_path, capsys):
     assert "CONFIDENCE METER SCORE BREAKDOWN" in captured
     assert "RELIANCE.NS" in captured
     assert "Trend Check" in captured
-    assert "TOTAL POINTS: 25 / 65" in captured
+    assert "TOTAL POINTS: 25 / 25" in captured
 
 
 def test_run_score_not_found(tmp_path, capsys):

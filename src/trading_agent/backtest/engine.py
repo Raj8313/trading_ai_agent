@@ -64,6 +64,7 @@ class BacktestEngine:
         max_concurrent_positions: int = 3,
         round_trip_cost_rate: float = 0.001,  # 0.1% round-trip statutory costs
         slippage_rate: float = 0.0005,  # 0.05% per side
+        meter_version: str = "v2",
     ) -> None:
         """Initialize engine with ports, exit policy, and conservative cost parameters."""
         self.storage = storage
@@ -74,6 +75,7 @@ class BacktestEngine:
         self.max_concurrent_positions = max_concurrent_positions
         self.cost_rate = round_trip_cost_rate
         self.slippage_rate = slippage_rate
+        self.meter_version = meter_version
 
         self.events: list[BacktestLogEvent] = []
 
@@ -174,7 +176,7 @@ class BacktestEngine:
                     # One position per symbol at a time (no pyramiding)
                     continue
 
-                score = self.storage.get_score(sym, current_day)
+                score = self.storage.get_score(sym, current_day, meter_version=self.meter_version)
                 if score and score.band in (TradeBand.FULL, TradeBand.HALF):
                     day_signals.append(score)
 

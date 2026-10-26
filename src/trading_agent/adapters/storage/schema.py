@@ -1,6 +1,6 @@
 """SQL schemas and statements for SQLite storage adapter."""
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 INIT_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -15,11 +15,13 @@ CREATE TABLE IF NOT EXISTS scores (
     band TEXT NOT NULL,
     check_results_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    PRIMARY KEY (symbol, date)
+    meter_version TEXT NOT NULL DEFAULT 'v1',
+    PRIMARY KEY (symbol, date, meter_version)
 );
 
 CREATE INDEX IF NOT EXISTS idx_scores_symbol ON scores(symbol);
 CREATE INDEX IF NOT EXISTS idx_scores_date ON scores(date);
+CREATE INDEX IF NOT EXISTS idx_scores_version ON scores(meter_version);
 
 CREATE TABLE IF NOT EXISTS data_quality_issues (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,23 +66,64 @@ CREATE INDEX IF NOT EXISTS idx_trades_run_id ON trades(run_id);
 """
 
 UPSERT_SCORE_SQL = """
-INSERT INTO scores (symbol, date, total_points, band, check_results_json, created_at)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(symbol, date) DO UPDATE SET
+INSERT INTO scores (symbol, date, total_points, band, check_results_json, created_at, meter_version)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, date, meter_version) DO UPDATE SET
     total_points = excluded.total_points,
     band = excluded.band,
     check_results_json = excluded.check_results_json,
     created_at = excluded.created_at;
 """
 
-GET_SCORE_SQL = "SELECT symbol, date, total_points, band, check_results_json FROM scores WHERE symbol = ? AND date = ?;"
+GET_SCORE_SQL = """
+SELECT symbol, date, total_points, band, check_results_json, meter_version
+FROM scores
+WHERE symbol = ? AND date = ? AND meter_version = ?;
+"""
 
-GET_ALL_SCORES_SQL = "SELECT symbol, date, total_points, band, check_results_json FROM scores WHERE symbol = ? ORDER BY date ASC;"
+GET_SCORE_ANY_VERSION_SQL = """
+SELECT symbol, date, total_points, band, check_results_json, meter_version
+FROM scores
+WHERE symbol = ? AND date = ?
+ORDER BY meter_version DESC LIMIT 1;
+"""
 
-GET_SCORE_COUNTS_SQL = "SELECT symbol, COUNT(*) as count FROM scores GROUP BY symbol ORDER BY symbol ASC;"
+GET_ALL_SCORES_SQL = """
+SELECT symbol, date, total_points, band, check_results_json, meter_version
+FROM scores
+WHERE symbol = ? AND meter_version = ?
+ORDER BY date ASC;
+"""
+
+GET_SCORE_COUNTS_SQL = """
+SELECT symbol, COUNT(*) as count
+FROM scores
+WHERE meter_version = ?
+GROUP BY symbol
+ORDER BY symbol ASC;
+"""
+
+GET_ALL_SCORE_COUNTS_SQL = """
+SELECT symbol, COUNT(*) as count
+FROM scores
+GROUP BY symbol
+ORDER BY symbol ASC;
+"""
 
 GET_LATEST_SCORES_SQL = """
-SELECT s.symbol, s.date, s.total_points, s.band, s.check_results_json
+SELECT s.symbol, s.date, s.total_points, s.band, s.check_results_json, s.meter_version
+FROM scores s
+INNER JOIN (
+    SELECT symbol, MAX(date) AS max_date
+    FROM scores
+    WHERE meter_version = ?
+    GROUP BY symbol
+) latest ON s.symbol = latest.symbol AND s.date = latest.max_date AND s.meter_version = ?
+ORDER BY s.total_points DESC;
+"""
+
+GET_LATEST_SCORES_ANY_VERSION_SQL = """
+SELECT s.symbol, s.date, s.total_points, s.band, s.check_results_json, s.meter_version
 FROM scores s
 INNER JOIN (
     SELECT symbol, MAX(date) AS max_date
@@ -91,10 +134,21 @@ ORDER BY s.total_points DESC;
 """
 
 GET_SCORES_IN_RANGE_SQL = """
-SELECT symbol, date, total_points, band, check_results_json
+SELECT symbol, date, total_points, band, check_results_json, meter_version
+FROM scores
+WHERE symbol = ? AND date >= ? AND date <= ? AND meter_version = ?
+ORDER BY date ASC;
+"""
+
+GET_SCORES_IN_RANGE_ANY_VERSION_SQL = """
+SELECT symbol, date, total_points, band, check_results_json, meter_version
 FROM scores
 WHERE symbol = ? AND date >= ? AND date <= ?
 ORDER BY date ASC;
+"""
+
+GET_SCORED_DATES_FOR_SYMBOL_SQL = """
+SELECT date FROM scores WHERE symbol = ? AND meter_version = ?;
 """
 
 INSERT_DQI_SQL = "INSERT INTO data_quality_issues (symbol, date, issue, recorded_at) VALUES (?, ?, ?, ?);"

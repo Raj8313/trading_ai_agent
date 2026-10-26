@@ -30,7 +30,7 @@ def make_bar_series(start_date: dt.date, count: int = 30) -> list[Bar]:
     return bars
 
 
-def make_test_score(symbol: str, date_val: dt.date, points: int = 85) -> Score:
+def make_test_score(symbol: str, date_val: dt.date, points: int = 85, meter_version: str = "v2") -> Score:
     """Helper to create a Score model."""
     check = CheckResult(
         check_name="Trend Check",
@@ -45,6 +45,7 @@ def make_test_score(symbol: str, date_val: dt.date, points: int = 85) -> Score:
         check_results=[check],
         total_points=points,
         band=Score.calculate_band(points),
+        meter_version=meter_version,
     )
 
 
@@ -141,7 +142,51 @@ def test_backtest_cli_main_entry_success(monkeypatch):
             end_date=dt.date(2024, 1, 20),
             db_path=None,
             export_csv=None,
+            meter_version=None,
         )
+
+
+def test_backtest_cli_refuses_when_symbol_has_only_v1_scores(tmp_path):
+    """Verify backtest refuses execution if symbol has only legacy v1 scores in range."""
+    db_file = tmp_path / "test_v1_guard.db"
+    storage = SqliteStorageAdapter(str(db_file))
+    start_date = dt.date(2024, 1, 1)
+    end_date = dt.date(2024, 1, 20)
+
+    # Save v1 scores
+    for i in range(20):
+        d = start_date + dt.timedelta(days=i)
+        storage.save_score(make_test_score("TEST_V1.NS", d, 85, meter_version="v1"))
+
+    ret = run_backtest_simulation(
+        start_date=start_date,
+        end_date=end_date,
+        db_path=str(db_file),
+        watchlist=["TEST_V1.NS"],
+        meter_version="v2",
+    )
+    assert ret == 1
+
+
+def test_backtest_cli_refuses_mixed_meter_versions(tmp_path):
+    """Verify backtest refuses execution on mixed meter versions."""
+    db_file = tmp_path / "test_mixed.db"
+    storage = SqliteStorageAdapter(str(db_file))
+    start_date = dt.date(2024, 1, 1)
+    end_date = dt.date(2024, 1, 20)
+
+    # Date 1 has only v1, Date 2 has v2
+    storage.save_score(make_test_score("MIXED.NS", start_date, 85, meter_version="v1"))
+    storage.save_score(make_test_score("MIXED.NS", start_date + dt.timedelta(days=1), 85, meter_version="v2"))
+
+    ret = run_backtest_simulation(
+        start_date=start_date,
+        end_date=end_date,
+        db_path=str(db_file),
+        watchlist=["MIXED.NS"],
+        meter_version="v2",
+    )
+    assert ret == 1
 
 
 def test_backtest_cli_invalid_date_formats(monkeypatch):

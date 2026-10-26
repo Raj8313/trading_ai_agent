@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 import datetime as dt
 from typing import Optional
 
+import trading_agent.config as config
 from trading_agent.domain.models import Bar, ExitDecision, ExitReason
 
 
@@ -47,14 +48,19 @@ class FixedTargetStopExitPolicy(ExitPolicyPort):
 
     def __init__(
         self,
-        stop_loss_pct: float = 0.02,
-        profit_target_pct: float = 0.04,
-        max_hold_days: int = 10,
+        stop_loss_pct: Optional[float] = None,
+        profit_target_pct: Optional[float] = None,
+        max_hold_days: Optional[int] = None,
     ) -> None:
-        """Initialize exit policy thresholds."""
-        self.stop_loss_pct = stop_loss_pct
-        self.profit_target_pct = profit_target_pct
-        self.max_hold_days = max_hold_days
+        """Initialize exit policy thresholds from config or overrides."""
+        settings = config.get_settings()
+        self.stop_loss_pct = stop_loss_pct if stop_loss_pct is not None else settings.stop_loss_pct
+        self.profit_target_pct = (
+            profit_target_pct if profit_target_pct is not None else settings.profit_target_pct
+        )
+        self.max_hold_days = (
+            max_hold_days if max_hold_days is not None else settings.max_hold_days
+        )
 
     def evaluate_bar(
         self,

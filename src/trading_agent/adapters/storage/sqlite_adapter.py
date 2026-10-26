@@ -12,12 +12,17 @@ import time
 from typing import Any, Callable, Optional, TypeVar
 
 from trading_agent.adapters.storage.schema import (
+    GET_ALL_SCORE_COUNTS_SQL,
     GET_ALL_SCORES_SQL,
     GET_BACKTEST_RUN_COUNT_BY_HASH_SQL,
     GET_BACKTEST_RUN_SQL,
+    GET_LATEST_SCORES_ANY_VERSION_SQL,
     GET_LATEST_SCORES_SQL,
+    GET_SCORE_ANY_VERSION_SQL,
     GET_SCORE_COUNTS_SQL,
     GET_SCORE_SQL,
+    GET_SCORED_DATES_FOR_SYMBOL_SQL,
+    GET_SCORES_IN_RANGE_ANY_VERSION_SQL,
     GET_SCORES_IN_RANGE_SQL,
     GET_TRADES_BY_RUN_ID_SQL,
     INIT_SCHEMA_SQL,
@@ -28,12 +33,7 @@ from trading_agent.adapters.storage.schema import (
     UPSERT_SCORE_SQL,
 )
 from trading_agent.domain.models import (
-    CheckResult,
-    DataQualityIssue,
-    ExitReason,
-    Score,
-    TradeBand,
-    TradeRecord,
+    CheckResult, DataQualityIssue, ExitReason, Score, TradeBand, TradeRecord
 )
 from trading_agent.ports.storage import StoragePort
 
@@ -65,8 +65,21 @@ class SqliteStorageAdapter(StoragePort):
         return conn
 
     def _init_db(self) -> None:
-        """Create versioned tables and indices if they do not exist."""
+        """Create versioned tables and indices if they do not exist, and migrate schema if needed."""
         with self._get_connection() as conn:
+            scores_exists = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='scores';"
+            ).fetchone()
+            if scores_exists:
+                cols = [col["name"] for col in conn.execute("PRAGMA table_info(scores);").fetchall()]
+                if "meter_version" not in cols:
+                    conn.execute("ALTER TABLE scores RENAME TO scores_old;")
+                    conn.executescript(INIT_SCHEMA_SQL)
+                    conn.execute("""
+                        INSERT INTO scores (symbol, date, total_points, band, check_results_json, created_at, meter_version)
+                        SELECT symbol, date, total_points, band, check_results_json, created_at, 'v1' FROM scores_old;
+                    """)
+                    conn.execute("DROP TABLE scores_old;")
             conn.executescript(INIT_SCHEMA_SQL)
             cursor = conn.execute("SELECT version FROM schema_version WHERE version = ?;", (SCHEMA_VERSION,))
             if not cursor.fetchone():
@@ -77,15 +90,13 @@ class SqliteStorageAdapter(StoragePort):
 
     def _execute_read_query(self, query_fn: Callable[[], T]) -> T:
         """Execute a read query function with retries on database lock/busy conditions."""
-        max_attempts = 3
-        for attempt in range(1, max_attempts + 1):
+        for attempt in range(1, 4):
             try:
                 return query_fn()
             except sqlite3.OperationalError as exc:
-                err_str = str(exc).lower()
-                if "locked" in err_str or "busy" in err_str:
-                    logger.warning("Database locked/busy (attempt %d/%d): %s", attempt, max_attempts, exc)
-                    if attempt < max_attempts:
+                if any(k in str(exc).lower() for k in ("locked", "busy")):
+                    logger.warning("Database locked/busy (attempt %d/3): %s", attempt, exc)
+                    if attempt < 3:
                         time.sleep(1.0)
                         continue
                     raise DatabaseBusyError("Database busy — try again in a moment") from exc
@@ -95,64 +106,71 @@ class SqliteStorageAdapter(StoragePort):
         """Upsert a score record into SQLite. Raises loudly on database errors."""
         checks_payload = json.dumps([c.model_dump() for c in score.check_results])
         now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
-        date_str = score.date.isoformat()
         try:
             with self._get_connection() as conn:
                 conn.execute(
                     UPSERT_SCORE_SQL,
-                    (score.symbol, date_str, score.total_points, score.band.value, checks_payload, now_iso),
+                    (score.symbol, score.date.isoformat(), score.total_points,
+                     score.band.value, checks_payload, now_iso, score.meter_version),
                 )
         except Exception as e:
             logger.error("Failed to save score for %s on %s: %s", score.symbol, score.date, e)
             raise
 
-    def get_score(self, symbol: str, date: dt.date) -> Optional[Score]:
+    def get_score(self, symbol: str, date: dt.date, meter_version: Optional[str] = None) -> Optional[Score]:
         """Fetch score for a symbol on a specific date."""
         def _query() -> Optional[Score]:
             with self._get_connection() as conn:
-                row = conn.execute(GET_SCORE_SQL, (symbol, date.isoformat())).fetchone()
+                sql = GET_SCORE_SQL if meter_version else GET_SCORE_ANY_VERSION_SQL
+                params = (symbol, date.isoformat(), meter_version) if meter_version else (symbol, date.isoformat())
+                row = conn.execute(sql, params).fetchone()
                 return self._row_to_score(row) if row else None
-
         return self._execute_read_query(_query)
 
-    def get_all_scores_for_symbol(self, symbol: str) -> list[Score]:
+    def get_all_scores_for_symbol(self, symbol: str, meter_version: Optional[str] = None) -> list[Score]:
         """Fetch all scores for a symbol ordered by date ascending."""
         def _query() -> list[Score]:
             with self._get_connection() as conn:
-                rows = conn.execute(GET_ALL_SCORES_SQL, (symbol,)).fetchall()
-                return [self._row_to_score(r) for r in rows]
-
+                sql = GET_ALL_SCORES_SQL if meter_version else "SELECT symbol, date, total_points, band, check_results_json, meter_version FROM scores WHERE symbol = ? ORDER BY date ASC;"
+                params = (symbol, meter_version) if meter_version else (symbol,)
+                return [self._row_to_score(r) for r in conn.execute(sql, params).fetchall()]
         return self._execute_read_query(_query)
 
-    def get_score_counts_by_symbol(self) -> dict[str, int]:
+    def get_score_counts_by_symbol(self, meter_version: Optional[str] = None) -> dict[str, int]:
         """Return the count of scores grouped by symbol."""
         def _query() -> dict[str, int]:
             with self._get_connection() as conn:
-                rows = conn.execute(GET_SCORE_COUNTS_SQL).fetchall()
-                return {row["symbol"]: row["count"] for row in rows}
-
+                sql = GET_SCORE_COUNTS_SQL if meter_version else GET_ALL_SCORE_COUNTS_SQL
+                params = (meter_version,) if meter_version else ()
+                return {r["symbol"]: r["count"] for r in conn.execute(sql, params).fetchall()}
         return self._execute_read_query(_query)
 
-    def get_latest_scores(self) -> list[Score]:
+    def get_latest_scores(self, meter_version: Optional[str] = None) -> list[Score]:
         """Fetch the most recent score for each symbol in storage, ordered by total_points DESC."""
         def _query() -> list[Score]:
             with self._get_connection() as conn:
-                rows = conn.execute(GET_LATEST_SCORES_SQL).fetchall()
-                return [self._row_to_score(r) for r in rows]
-
+                sql = GET_LATEST_SCORES_SQL if meter_version else GET_LATEST_SCORES_ANY_VERSION_SQL
+                params = (meter_version, meter_version) if meter_version else ()
+                return [self._row_to_score(r) for r in conn.execute(sql, params).fetchall()]
         return self._execute_read_query(_query)
 
     def get_scores_for_symbol_in_range(
-        self, symbol: str, start_date: dt.date, end_date: dt.date
+        self, symbol: str, start_date: dt.date, end_date: dt.date, meter_version: Optional[str] = None
     ) -> list[Score]:
         """Fetch scores for a symbol within a date window ascending."""
         def _query() -> list[Score]:
             with self._get_connection() as conn:
-                rows = conn.execute(
-                    GET_SCORES_IN_RANGE_SQL, (symbol, start_date.isoformat(), end_date.isoformat())
-                ).fetchall()
-                return [self._row_to_score(r) for r in rows]
+                sql = GET_SCORES_IN_RANGE_SQL if meter_version else GET_SCORES_IN_RANGE_ANY_VERSION_SQL
+                params = (symbol, start_date.isoformat(), end_date.isoformat(), meter_version) if meter_version else (symbol, start_date.isoformat(), end_date.isoformat())
+                return [self._row_to_score(r) for r in conn.execute(sql, params).fetchall()]
+        return self._execute_read_query(_query)
 
+    def get_scored_dates_for_symbol(self, symbol: str, meter_version: str = "v1") -> set[dt.date]:
+        """Fetch set of all dates already scored for a symbol and meter version."""
+        def _query() -> set[dt.date]:
+            with self._get_connection() as conn:
+                rows = conn.execute(GET_SCORED_DATES_FOR_SYMBOL_SQL, (symbol, meter_version)).fetchall()
+                return {dt.date.fromisoformat(r["date"]) for r in rows}
         return self._execute_read_query(_query)
 
     def save_data_quality_issue(self, issue: DataQualityIssue) -> None:
@@ -167,29 +185,22 @@ class SqliteStorageAdapter(StoragePort):
 
     def get_data_quality_issues(self, symbol: Optional[str] = None) -> list[DataQualityIssue]:
         """Fetch data quality issues, optionally filtered by symbol, most recent first."""
-        if symbol:
-            sql = "SELECT symbol, date, issue, recorded_at FROM data_quality_issues WHERE symbol = ? ORDER BY id DESC;"
-            params = (symbol,)
-        else:
-            sql = "SELECT symbol, date, issue, recorded_at FROM data_quality_issues ORDER BY id DESC;"
-            params = ()
-
+        sql = "SELECT symbol, date, issue, recorded_at FROM data_quality_issues" + (
+            " WHERE symbol = ? ORDER BY id DESC;" if symbol else " ORDER BY id DESC;"
+        )
+        params = (symbol,) if symbol else ()
         def _query() -> list[DataQualityIssue]:
             with self._get_connection() as conn:
                 rows = conn.execute(sql, params).fetchall()
-                results = []
-                for row in rows:
-                    parsed_date = dt.date.fromisoformat(row["date"]) if row["date"] else None
-                    results.append(
-                        DataQualityIssue(
-                            symbol=row["symbol"],
-                            date=parsed_date,
-                            issue=row["issue"],
-                            recorded_at=dt.datetime.fromisoformat(row["recorded_at"]),
-                        )
+                return [
+                    DataQualityIssue(
+                        symbol=r["symbol"],
+                        date=dt.date.fromisoformat(r["date"]) if r["date"] else None,
+                        issue=r["issue"],
+                        recorded_at=dt.datetime.fromisoformat(r["recorded_at"]),
                     )
-                return results
-
+                    for r in rows
+                ]
         return self._execute_read_query(_query)
 
     @staticmethod
@@ -197,12 +208,14 @@ class SqliteStorageAdapter(StoragePort):
         """Helper to convert a SQLite row into a domain Score object."""
         checks_data = json.loads(row["check_results_json"])
         check_results = [CheckResult(**c) for c in checks_data]
+        meter_version = row["meter_version"] if "meter_version" in row.keys() else "v1"
         return Score(
             symbol=row["symbol"],
             date=dt.date.fromisoformat(row["date"]),
             check_results=check_results,
             total_points=row["total_points"],
             band=TradeBand(row["band"]),
+            meter_version=meter_version,
         )
 
     def save_backtest_run(
@@ -216,8 +229,6 @@ class SqliteStorageAdapter(StoragePort):
         version: int = 1,
     ) -> str:
         """Persist a completed backtest run and its trades atomically."""
-        params_json = json.dumps(params, default=str)
-        metrics_json = json.dumps(metrics, default=str)
         trade_rows = [
             (
                 run_id, t.symbol, t.signal_date.isoformat(), t.entry_date.isoformat(),
@@ -230,7 +241,7 @@ class SqliteStorageAdapter(StoragePort):
             with self._get_connection() as conn:
                 conn.execute(
                     INSERT_BACKTEST_RUN_SQL,
-                    (run_id, version, started_at.isoformat(), params_json, config_hash, metrics_json),
+                    (run_id, version, started_at.isoformat(), json.dumps(params, default=str), config_hash, json.dumps(metrics, default=str)),
                 )
                 conn.executemany(INSERT_TRADE_SQL, trade_rows)
             return run_id
@@ -263,18 +274,12 @@ class SqliteStorageAdapter(StoragePort):
                 rows = conn.execute(GET_TRADES_BY_RUN_ID_SQL, (run_id,)).fetchall()
                 return [
                     TradeRecord(
-                        symbol=r["symbol"],
-                        signal_date=dt.date.fromisoformat(r["signal_date"]),
-                        entry_date=dt.date.fromisoformat(r["entry_date"]),
-                        entry_price=r["entry_price"],
-                        exit_date=dt.date.fromisoformat(r["exit_date"]),
-                        exit_price=r["exit_price"],
-                        exit_reason=ExitReason(r["exit_reason"]),
-                        band=TradeBand(r["band"]),
-                        position_size=r["position_size"],
-                        gross_pnl=r["gross_pnl"],
-                        net_pnl=r["net_pnl"],
-                        rule_followed=bool(r["rule_followed"]),
+                        symbol=r["symbol"], signal_date=dt.date.fromisoformat(r["signal_date"]),
+                        entry_date=dt.date.fromisoformat(r["entry_date"]), entry_price=r["entry_price"],
+                        exit_date=dt.date.fromisoformat(r["exit_date"]), exit_price=r["exit_price"],
+                        exit_reason=ExitReason(r["exit_reason"]), band=TradeBand(r["band"]),
+                        position_size=r["position_size"], gross_pnl=r["gross_pnl"],
+                        net_pnl=r["net_pnl"], rule_followed=bool(r["rule_followed"]),
                     )
                     for r in rows
                 ]

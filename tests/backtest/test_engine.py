@@ -52,7 +52,7 @@ def test_lookahead_guard_and_crash_day():
     day_d2 = dt.date(2024, 1, 12)
 
     # Signal on Day D
-    mock_storage.get_score.side_effect = lambda sym, d: make_score(sym, d, TradeBand.HALF, 65) if d == day_d else None
+    mock_storage.get_score.side_effect = lambda sym, d, **kw: make_score(sym, d, TradeBand.HALF, 65) if d == day_d else None
 
     # Bars: On Day D+1, opens at 100.0, then crashes massively to 50.0!
     bars = [
@@ -93,7 +93,7 @@ def test_capacity_limit_and_skipped_logging():
     symbols = ["SYM1.NS", "SYM2.NS", "SYM3.NS", "SYM4.NS"]
 
     # All 4 symbols fire signals on Day D
-    def get_score_mock(sym, d):
+    def get_score_mock(sym, d, **kw):
         if d == day_d:
             pts = 65 if sym != "SYM4.NS" else 60
             return make_score(sym, d, TradeBand.HALF, pts)
@@ -150,7 +150,7 @@ def test_missing_price_data_logged():
     day_d = dt.date(2024, 1, 10)
     day_d1 = dt.date(2024, 1, 11)
 
-    mock_storage.get_score.side_effect = lambda sym, d: make_score(sym, d, TradeBand.HALF, 65) if d == day_d and sym == "SYM_GAP.NS" else None
+    mock_storage.get_score.side_effect = lambda sym, d, **kw: make_score(sym, d, TradeBand.HALF, 65) if d == day_d and sym == "SYM_GAP.NS" else None
 
     # SYM_OK has both days (so day_d1 is an established trading day on the calendar)
     # but SYM_GAP is missing its bar on day_d1
@@ -182,7 +182,7 @@ def test_successful_target_trade_full_lifecycle():
     day_d1 = dt.date(2024, 1, 2)
     day_d2 = dt.date(2024, 1, 3)
 
-    mock_storage.get_score.side_effect = lambda sym, d: make_score(sym, d, TradeBand.FULL, 85) if d == day_d else None
+    mock_storage.get_score.side_effect = lambda sym, d, **kw: make_score(sym, d, TradeBand.FULL, 85) if d == day_d else None
 
     # Day D+1 enters at 100.0. Day D+2 hits target (+4% = 104.0)
     bars = [

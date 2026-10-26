@@ -14,9 +14,24 @@ logger = logging.getLogger(__name__)
 DEFAULT_WATCHLIST = [
     "RELIANCE.NS",
     "TCS.NS",
-    "INFY.NS",
     "HDFCBANK.NS",
     "ICICIBANK.NS",
+    "INFY.NS",
+    "SBIN.NS",
+    "BHARTIARTL.NS",
+    "ITC.NS",
+    "LT.NS",
+    "KOTAKBANK.NS",
+    "AXISBANK.NS",
+    "ASIANPAINT.NS",
+    "MARUTI.NS",
+    "TITAN.NS",
+    "HINDUNILVR.NS",
+    "SUNPHARMA.NS",
+    "ULTRACEMCO.NS",
+    "HCLTECH.NS",
+    "WIPRO.NS",
+    "NESTLEIND.NS",
 ]
 
 
@@ -34,6 +49,26 @@ class Settings(BaseSettings):
     benchmark_symbol: str = Field(
         default="^NSEI",
         description="Market index ticker symbol (default NIFTY 50)",
+    )
+    backfill_years: int = Field(
+        default=5,
+        description="Default backfill duration in years",
+    )
+    stop_loss_pct: float = Field(
+        default=0.02,
+        description="Standard stop-loss percentage (2%)",
+    )
+    profit_target_pct: float = Field(
+        default=0.04,
+        description="Standard profit target percentage (4%)",
+    )
+    max_hold_days: int = Field(
+        default=10,
+        description="Maximum holding duration in trading days",
+    )
+    meter_version: str = Field(
+        default="v2",
+        description="Active confidence meter version (v1 or v2)",
     )
     telegram_bot_token: Optional[str] = Field(
         default=None,

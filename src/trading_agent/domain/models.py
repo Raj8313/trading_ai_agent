@@ -85,6 +85,7 @@ class Score(BaseModel):
     )
     total_points: int = Field(..., ge=0, description="Sum of points awarded")
     band: TradeBand = Field(..., description="Trade band corresponding to total points")
+    meter_version: str = Field(default="v1", description="Meter version used to compute score (e.g. v1, v2)")
 
     @classmethod
     def calculate_band(cls, total_points: int) -> TradeBand:

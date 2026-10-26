@@ -22,12 +22,15 @@ class StoragePort(ABC):
         pass
 
     @abstractmethod
-    def get_score(self, symbol: str, date: dt.date) -> Optional[Score]:
+    def get_score(
+        self, symbol: str, date: dt.date, meter_version: Optional[str] = None
+    ) -> Optional[Score]:
         """Retrieve a persisted score for a symbol on a specific date.
 
         Args:
             symbol: Ticker symbol.
             date: Evaluation date.
+            meter_version: Optional confidence meter version (returns latest version if None).
 
         Returns:
             The Score if found, otherwise None.
@@ -35,11 +38,14 @@ class StoragePort(ABC):
         pass
 
     @abstractmethod
-    def get_all_scores_for_symbol(self, symbol: str) -> list[Score]:
+    def get_all_scores_for_symbol(
+        self, symbol: str, meter_version: Optional[str] = None
+    ) -> list[Score]:
         """Retrieve all persisted scores for a symbol ordered by date.
 
         Args:
             symbol: Ticker symbol.
+            meter_version: Optional confidence meter version.
 
         Returns:
             List of Score records.
@@ -47,8 +53,13 @@ class StoragePort(ABC):
         pass
 
     @abstractmethod
-    def get_score_counts_by_symbol(self) -> dict[str, int]:
+    def get_score_counts_by_symbol(
+        self, meter_version: Optional[str] = None
+    ) -> dict[str, int]:
         """Return the count of stored score records grouped by symbol.
+
+        Args:
+            meter_version: Optional confidence meter version filter.
 
         Returns:
             Dictionary mapping symbol -> total count of scores.
@@ -79,8 +90,11 @@ class StoragePort(ABC):
         pass
 
     @abstractmethod
-    def get_latest_scores(self) -> list[Score]:
+    def get_latest_scores(self, meter_version: Optional[str] = None) -> list[Score]:
         """Retrieve the most recent Score record for every symbol in storage.
+
+        Args:
+            meter_version: Optional confidence meter version filter.
 
         Returns:
             List of latest Score instances, sorted by total_points descending.
@@ -89,7 +103,11 @@ class StoragePort(ABC):
 
     @abstractmethod
     def get_scores_for_symbol_in_range(
-        self, symbol: str, start_date: dt.date, end_date: dt.date
+        self,
+        symbol: str,
+        start_date: dt.date,
+        end_date: dt.date,
+        meter_version: Optional[str] = None,
     ) -> list[Score]:
         """Retrieve scores for a specific symbol within a date window.
 
@@ -97,9 +115,25 @@ class StoragePort(ABC):
             symbol: Ticker symbol.
             start_date: Start date (inclusive).
             end_date: End date (inclusive).
+            meter_version: Optional confidence meter version filter.
 
         Returns:
             List of Score records ordered chronologically.
+        """
+        pass
+
+    @abstractmethod
+    def get_scored_dates_for_symbol(
+        self, symbol: str, meter_version: str = "v1"
+    ) -> set[dt.date]:
+        """Retrieve the set of evaluation dates already scored for a symbol.
+
+        Args:
+            symbol: Ticker symbol.
+            meter_version: Confidence meter version (default v1).
+
+        Returns:
+            Set of scored dates.
         """
         pass
 

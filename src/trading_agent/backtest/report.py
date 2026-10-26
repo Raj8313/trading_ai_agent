@@ -27,6 +27,7 @@ def print_backtest_report(
     end_date: dt.date,
     initial_capital: float = 300000.0,
     run_id: str = "",
+    meter_version: str = "v2",
 ) -> None:
     """Print an auditable, beginner-friendly backtest report to terminal."""
     strategy_return_pct = (metrics.net_pnl / initial_capital) * 100.0 if initial_capital > 0 else 0.0
@@ -36,6 +37,7 @@ def print_backtest_report(
     print("=" * 65)
     if run_id:
         print(f" Run ID:         {run_id}")
+    print(f" Meter Version:  {meter_version}")
     print(f" Period:         {start_date.isoformat()} to {end_date.isoformat()}")
     print(f" Virtual Capital: ₹{initial_capital:,.2f} (Max 3 concurrent positions)")
     print(f" Benchmark:      {metrics.baseline_symbol} Buy & Hold")
@@ -85,17 +87,19 @@ def print_backtest_report(
         f"win rate {metrics.win_rate_pct:.1f}% across {metrics.total_trades} trades.\""
     )
 
-    if metrics.total_trades < 30:
+    if metrics.total_trades < 100:
         print("\n  ⚠️ STATISTICAL HONESTY WARNING:")
         print(
-            f"  Too few trades ({metrics.total_trades} < 30) to draw definitive statistical conclusions.\n"
+            f"  Sample size ({metrics.total_trades} trades < 100) is still too small for confidence.\n"
             "  More market cycles and historical samples are required before committing real capital."
         )
 
-    print("\n5. KNOWN LIMITATIONS (Phase 2 Simulation)")
+    print("\n5. KNOWN LIMITATIONS & DATA INTEGRITY")
     print("-" * 65)
     print("  1. EOD Exit Triggers: Stop/Target evaluated on daily closing prices, not tick-by-tick.")
     print("  2. Intrabar Priority: Intrabar conflict conservatively assumes Stop-loss hit.")
     print("  3. Dividends Excluded: Cash dividend distributions are omitted (conservative drag).")
     print("  4. Zero Curve-Fitting: Default fixed rules tested; no parameter optimization applied.")
+    print(f"  5. Version Integrity: Simulation executed exclusively on {meter_version} scores.")
+    print("     Legacy scores (v1) remain preserved and intact in database storage.")
     print("=" * 65 + "\n")

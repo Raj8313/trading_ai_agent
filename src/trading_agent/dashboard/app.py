@@ -54,27 +54,28 @@ def render_overview(storage: StoragePort) -> None:
         st.warning("⚠️ No data found in database. Run `uv run backfill` in your terminal first to populate historical scores.")
         return
 
-    # Build display table
+    # Build display table with dynamic check columns
+    all_check_names: list[str] = []
+    for score in latest_scores:
+        for c in score.check_results:
+            if c.check_name not in all_check_names:
+                all_check_names.append(c.check_name)
+
     rows = []
     for score in latest_scores:
         check_map = {c.check_name: ("✅" if c.passed else "❌") for c in score.check_results}
-
-        trend_val = check_map.get("Trend Check", "N/A")
-        volume_val = check_map.get("Volume Check", "N/A")
-        mkt_val = check_map.get("Market Direction Check", "N/A")
         max_possible = sum(c.max_points for c in score.check_results) if score.check_results else 100
 
-        rows.append(
-            {
-                "Symbol": score.symbol,
-                "Latest Date": score.date.strftime("%Y-%m-%d") if score.date else "—",
-                "Total Score": f"{score.total_points} / {max_possible}",
-                "Band": format_band_badge(score.band),
-                "Trend Check": trend_val,
-                "Volume Check": volume_val,
-                "Market Check": mkt_val,
-            }
-        )
+        row = {
+            "Symbol": score.symbol,
+            "Latest Date": score.date.strftime("%Y-%m-%d") if score.date else "—",
+            "Version": getattr(score, "meter_version", "v1"),
+            "Total Score": f"{score.total_points} / {max_possible}",
+            "Band": format_band_badge(score.band),
+        }
+        for name in all_check_names:
+            row[name] = check_map.get(name, "—")
+        rows.append(row)
 
     df = pd.DataFrame(rows)
     st.dataframe(
@@ -141,9 +142,10 @@ def render_symbol_detail(storage: StoragePort) -> None:
         st.subheader(f"🎯 Latest Score Breakdown ({selected_symbol} on {latest_score.date.isoformat()})")
 
         max_possible = sum(c.max_points for c in latest_score.check_results) if latest_score.check_results else 100
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Confidence Points", f"{latest_score.total_points} / {max_possible}")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Points", f"{latest_score.total_points} / {max_possible}")
         col2.metric("Trade Band", format_band_badge(latest_score.band))
+        col3.metric("Meter Version", getattr(latest_score, "meter_version", "v1"))
 
         if latest_score.band == TradeBand.FULL:
             action_desc = "🟢 BUY (FULL POSITION)"
@@ -151,7 +153,7 @@ def render_symbol_detail(storage: StoragePort) -> None:
             action_desc = "🟡 BUY (HALF POSITION)"
         else:
             action_desc = "🔴 NO TRADE (PASS)"
-        col3.metric("Action Decision", action_desc)
+        col4.metric("Action Decision", action_desc)
 
         st.markdown("#### Individual Check Rationales")
         if latest_score.check_results:
@@ -200,7 +202,7 @@ def render_data_quality(storage: StoragePort) -> None:
 def main() -> None:
     """Main dashboard entry point with sidebar navigation."""
     st.sidebar.title("🤖 Trading Agent")
-    st.sidebar.caption("Phase 1.5 — Read-Only Dashboard")
+    st.sidebar.caption("Phase 3 — 5-Check Confidence Meter")
 
     page = st.sidebar.radio(
         "Navigation",
