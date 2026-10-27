@@ -141,8 +141,8 @@ ACTION:       🟢 BUY (FULL POSITION)
 =======================================================
 ```
 
-### 3. Launch Read-Only Dashboard
-Launch the interactive browser dashboard with a single command to view latest watchlist scores, 12-month score charts, dynamic check columns, and data quality logs:
+### 3. Launch Web Dashboard (GUI)
+Launch the interactive browser dashboard with a single command to view latest watchlist scores, 12-month score charts, trigger historical backtests with one click, and inspect data quality logs:
 
 ```bash
 uv run dashboard
@@ -150,7 +150,8 @@ uv run dashboard
 
 - **Page 1 (Overview)**: Watchlist table with latest scores, meter versions (`v1` or `v2`), colored band badges (🟢 $\ge 80$, 🟡 $60\text{--}79$, 🔴 $< 60$), and dynamic check pass/fail indicators.
 - **Page 2 (Symbol Detail)**: Interactive 12-month score history line chart with threshold lines + check rationale breakdown and meter version display.
-- **Page 3 (Data Quality)**: Audit log of any feed anomalies, empty bars, or skipped records.
+- **Page 3 (Backtest)**: Interactive simulation GUI! Pick quick presets ("Last 7 Days", "Last 30 Days", "Last 1 Year", "Last 5 Years") or custom calendar dates, click **"🚀 Run Backtest Simulation"**, view performance metrics, explore the executed trades log, and download them as CSV with one click.
+- **Page 4 (Data Quality)**: Audit log of any feed anomalies, empty bars, or skipped records.
 
 ### 4. Run Backtesting & Validation Simulation (5-Year Historical Test)
 Run historical simulation over persisted `v2` confidence scores across 5 years to test whether signals would have made money after all realistic statutory charges and slippage:

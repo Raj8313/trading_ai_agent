@@ -11,6 +11,7 @@ import streamlit as st
 
 from trading_agent.adapters.storage import DatabaseBusyError, SqliteStorageAdapter
 from trading_agent.config import get_settings
+from trading_agent.dashboard.backtest_view import render_backtest_view
 from trading_agent.domain.models import TradeBand
 from trading_agent.ports.storage import StoragePort
 
@@ -206,7 +207,7 @@ def main() -> None:
 
     page = st.sidebar.radio(
         "Navigation",
-        ["Overview", "Symbol Detail", "Data Quality"],
+        ["Overview", "Symbol Detail", "Backtest", "Data Quality"],
         index=0,
     )
 
@@ -216,6 +217,8 @@ def main() -> None:
         render_overview(storage)
     elif page == "Symbol Detail":
         render_symbol_detail(storage)
+    elif page == "Backtest":
+        render_backtest_view(storage)
     elif page == "Data Quality":
         render_data_quality(storage)
 

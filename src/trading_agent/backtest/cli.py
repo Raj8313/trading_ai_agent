@@ -8,8 +8,6 @@ and outputs a beginner-friendly terminal report with optional CSV export.
 import argparse
 import csv
 import datetime as dt
-import hashlib
-import json
 import logging
 from pathlib import Path
 import sys
@@ -17,12 +15,9 @@ from typing import Optional
 
 from trading_agent.adapters.market_data.yfinance_adapter import YFinanceMarketDataAdapter
 from trading_agent.adapters.storage.sqlite_adapter import SqliteStorageAdapter
-from trading_agent.backtest.engine import BacktestEngine
-from trading_agent.backtest.metrics import calculate_metrics
-from trading_agent.backtest.policies.exit_policy import FixedTargetStopExitPolicy
 from trading_agent.backtest.report import print_backtest_report
+from trading_agent.backtest.runner import execute_backtest
 from trading_agent.config import get_settings
-from trading_agent.domain.models import Bar, Score
 
 logger = logging.getLogger("trading_agent.backtest.cli")
 
@@ -59,135 +54,37 @@ def run_backtest_simulation(
     print(f"   Benchmark: {bench_symbol}")
     print(f"=======================================================\n")
 
-    # 1. Fetch benchmark bars for calendar & baseline
-    fetch_start = start_date - dt.timedelta(days=35)
-    fetch_end = end_date + dt.timedelta(days=25)
     print(f"Fetching market bars for benchmark {bench_symbol}...")
-    try:
-        bench_bars = market_data.fetch_daily_bars(bench_symbol, fetch_start, fetch_end)
-    except Exception as e:
-        logger.warning("Could not fetch benchmark bars: %s", e)
-        bench_bars = []
-
-    bench_in_range = [b for b in bench_bars if start_date <= b.date <= end_date]
-    if bench_in_range:
-        expected_trading_days = len(bench_in_range)
-    else:
-        curr, weekdays = start_date, 0
-        while curr <= end_date:
-            if curr.weekday() < 5:
-                weekdays += 1
-            curr += dt.timedelta(days=1)
-        expected_trading_days = max(1, int(weekdays * 0.95))
-
-    # 2. Check score version integrity and coverage (>= 95% required)
-    offending_symbols = []
-    for sym in symbols:
-        all_scores = storage.get_scores_for_symbol_in_range(sym, start_date, end_date, meter_version=None)
-        v2_scores = [s for s in all_scores if s.meter_version == active_meter_version]
-        v1_scores = [s for s in all_scores if s.meter_version == "v1"]
-
-        if len(v2_scores) == 0 and len(v1_scores) > 0:
-            print(f"❌ Error: Symbol {sym} has only v1 scores. Please run backfill with {active_meter_version} meter first.")
-            return 1
-
-        v1_dates, v2_dates = {s.date for s in v1_scores}, {s.date for s in v2_scores}
-        if (v1_dates - v2_dates) and len(v2_scores) > 0:
-            print(f"❌ Error: Mixed meter version data for {sym}. Missing {active_meter_version} scores on {len(v1_dates - v2_dates)} dates.")
-            return 1
-
-        coverage_pct = (len(v2_scores) / expected_trading_days) * 100.0 if expected_trading_days > 0 else 0.0
-        if coverage_pct < 95.0:
-            offending_symbols.append((sym, len(v2_scores), expected_trading_days, coverage_pct))
-
-    if offending_symbols:
-        print(f"❌ Error: Insufficient score coverage for date range {start_date} to {end_date} (meter {active_meter_version}).")
-        print("The following symbols have < 95% scored trading days:")
-        for sym, actual, expected, pct in offending_symbols:
-            print(f"  • {sym:<15}: {actual:>3} / {expected} days ({pct:.1f}%)")
-        print(f"\nPlease run backfill first to compute scores for this range:")
-        print(f"  uv run backfill --years {settings.backfill_years}\n")
-        return 1
-
-    # 3. Configure Exit Policy & Engine
-    exit_policy = FixedTargetStopExitPolicy(
-        stop_loss_pct=settings.stop_loss_pct,
-        profit_target_pct=settings.profit_target_pct,
-        max_hold_days=settings.max_hold_days,
-    )
-    engine = BacktestEngine(
+    result = execute_backtest(
+        start_date=start_date,
+        end_date=end_date,
         storage=storage,
         market_data=market_data,
-        exit_policy=exit_policy,
-        capital_per_full=100000.0,
-        capital_per_half=50000.0,
-        max_concurrent_positions=3,
-        round_trip_cost_rate=0.001,
-        slippage_rate=0.0005,
+        watchlist=symbols,
+        benchmark_symbol=bench_symbol,
         meter_version=active_meter_version,
     )
 
-    print("\nExecuting backtest simulation across historical timeline...")
-    trades = engine.run(
-        symbols=symbols,
-        start_date=start_date,
-        end_date=end_date,
-    )
-    print(f"✓ Simulation completed: {len(trades)} trades executed.")
+    if not result.success:
+        print(f"❌ Error: {result.error_message}")
+        if "Insufficient score coverage" in (result.error_message or ""):
+            print(f"\nPlease run backfill first to compute scores for this range:")
+            print(f"  uv run backfill --years {settings.backfill_years}\n")
+        return 1
 
-    # 5. Baseline price calculations
-    bench_initial_price = bench_in_range[0].close if bench_in_range else None
-    bench_final_price = bench_in_range[-1].close if bench_in_range else None
+    print(f"✓ Simulation completed: {len(result.trades)} trades executed.")
 
-    # 6. Performance metrics calculation
-    metrics = calculate_metrics(
-        trades=trades,
-        baseline_symbol=bench_symbol,
-        baseline_initial_price=bench_initial_price,
-        baseline_final_price=bench_final_price,
-        portfolio_initial_capital=300000.0,
-    )
-
-    # 7. Persistence & Versioning (Edge Case 7)
-    config_dict = {
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "symbols": sorted(symbols),
-        "benchmark": bench_symbol,
-        "meter_version": active_meter_version,
-        "stop_loss_pct": settings.stop_loss_pct,
-        "profit_target_pct": settings.profit_target_pct,
-        "max_holding_days": settings.max_hold_days,
-        "max_concurrent": 3,
-        "round_trip_cost_pct": 0.001,
-        "slippage_pct": 0.0005,
-    }
-    config_hash = hashlib.sha256(json.dumps(config_dict, sort_keys=True).encode()).hexdigest()[:12]
-    existing_runs_count = storage.get_backtest_run_count(config_hash)
-    version = existing_runs_count + 1
-    run_id = f"run_{config_hash}_v{version}"
-
-    storage.save_backtest_run(
-        run_id=run_id,
-        started_at=dt.datetime.now(dt.timezone.utc),
-        params=config_dict,
-        config_hash=config_hash,
-        metrics=metrics.model_dump(),
-        trades=trades,
-        version=version,
-    )
-
-    # 8. Print beginner-friendly report
+    # Print beginner-friendly report
     print_backtest_report(
-        metrics=metrics,
+        metrics=result.metrics,
         start_date=start_date,
         end_date=end_date,
-        initial_capital=300000.0,
-        run_id=run_id,
+        initial_capital=result.initial_capital,
+        run_id=result.run_id or "",
         meter_version=active_meter_version,
     )
 
-    # 9. Export CSV if requested
+    # Export CSV if requested
     if export_csv:
         export_path = Path(export_csv)
         try:
@@ -198,7 +95,7 @@ def run_backtest_simulation(
                     "exit_date", "exit_price", "exit_reason", "band",
                     "position_size", "gross_pnl", "net_pnl", "rule_followed",
                 ])
-                for t in trades:
+                for t in result.trades:
                     writer.writerow([
                         t.symbol,
                         t.signal_date.isoformat(),

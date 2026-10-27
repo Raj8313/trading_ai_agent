@@ -88,3 +88,73 @@ def test_dashboard_dynamic_checks_rendering():
         assert df.loc[df["Symbol"] == "V1_STOCK.NS", "Not-At-High Check"].values[0] == "—"
         # V2 stock has "✅" for all checks
         assert df.loc[df["Symbol"] == "V2_STOCK.NS", "Not-At-High Check"].values[0] == "✅"
+
+
+def test_render_backtest_view_ui_components():
+    """Verify backtest view renders presets, runs backtest, and displays results."""
+    import datetime as dt
+    from unittest.mock import MagicMock, patch
+    from trading_agent.backtest.metrics import BacktestMetrics, BandMetrics
+    from trading_agent.backtest.runner import BacktestResult
+    from trading_agent.dashboard.backtest_view import format_inr, format_pct, render_backtest_view
+    from trading_agent.domain.models import ExitReason, TradeBand, TradeRecord
+
+    assert format_inr(150.0) == "+₹150.00"
+    assert format_inr(-150.0) == "-₹150.00"
+    assert format_pct(2.5) == "+2.50%"
+    assert format_pct(-2.5) == "-2.50%"
+
+    mock_storage = MagicMock()
+    mock_trade = TradeRecord(
+        symbol="TEST.NS",
+        signal_date=dt.date(2024, 1, 1),
+        entry_date=dt.date(2024, 1, 2),
+        entry_price=100.0,
+        exit_date=dt.date(2024, 1, 5),
+        exit_price=104.0,
+        exit_reason=ExitReason.TARGET,
+        band=TradeBand.FULL,
+        position_size=100000.0,
+        gross_pnl=4000.0,
+        net_pnl=3900.0,
+        rule_followed=True,
+    )
+    mock_metrics = BacktestMetrics(
+        total_trades=1,
+        winning_trades=1,
+        losing_trades=0,
+        break_even_trades=0,
+        win_rate_pct=100.0,
+        gross_pnl=4000.0,
+        total_fees_and_slippage=100.0,
+        net_pnl=3900.0,
+        profit_factor=999.0,
+        expectancy_per_trade=3900.0,
+        max_drawdown_amount=0.0,
+        max_consecutive_wins=1,
+        max_consecutive_losses=0,
+        baseline_symbol="^NSEI",
+        baseline_return_pct=1.0,
+        baseline_return_amount=3000.0,
+        band_breakdown={"FULL": BandMetrics(band=TradeBand.FULL, total_trades=1, winning_trades=1, losing_trades=0, win_rate_pct=100.0, gross_pnl=4000.0, net_pnl=3900.0)},
+    )
+    mock_result = BacktestResult(
+        success=True,
+        run_id="run_test_v1",
+        metrics=mock_metrics,
+        trades=[mock_trade],
+        initial_capital=300000.0,
+    )
+
+    with patch("trading_agent.dashboard.backtest_view.st") as mock_st, \
+         patch("trading_agent.dashboard.backtest_view.execute_backtest", return_value=mock_result) as mock_exec:
+        mock_st.columns.side_effect = lambda n: [MagicMock() for _ in range(n)]
+        mock_st.button.return_value = True
+        mock_st.multiselect.return_value = ["TEST.NS"]
+        mock_st.session_state = {}
+
+        render_backtest_view(mock_storage)
+        assert mock_exec.called
+        assert mock_st.success.called
+        assert mock_st.dataframe.called
+        assert mock_st.download_button.called
