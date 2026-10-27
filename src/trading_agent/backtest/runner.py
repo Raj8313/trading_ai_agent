@@ -65,6 +65,16 @@ def execute_backtest(
     store = storage or SqliteStorageAdapter(db_path=target_db)
     mkt = market_data or YFinanceMarketDataAdapter(storage_adapter=store)
 
+    # Auto-clamp end_date if requested end_date is today or later and today's session has not closed
+    try:
+        latest_scores = store.get_latest_scores(meter_version=active_meter_version)
+        latest_scored_date = max((s.date for s in latest_scores), default=None)
+        if latest_scored_date and end_date > latest_scored_date and end_date >= dt.date.today():
+            logger.info("Clamping end_date from %s to latest completed trading day %s", end_date, latest_scored_date)
+            end_date = latest_scored_date
+    except Exception as exc:
+        logger.warning("Could not determine latest scored date for clamping: %s", exc)
+
     # 1. Fetch benchmark bars for calendar & baseline
     fetch_start = start_date - dt.timedelta(days=35)
     fetch_end = end_date + dt.timedelta(days=25)

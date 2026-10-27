@@ -35,8 +35,21 @@ def render_backtest_view(storage: StoragePort) -> None:
     settings = get_settings()
     today = dt.date.today()
 
+    # Query latest scored date from database
+    try:
+        latest_scores = storage.get_latest_scores(meter_version="v2")
+        latest_date = max((s.date for s in latest_scores), default=today)
+    except Exception:
+        latest_date = today
+
     # 1. Preset & Date Range Selection
     st.markdown("### 1. Select Simulation Period")
+    if latest_date < today:
+        st.info(
+            f"ℹ️ **Database has complete scores through {latest_date.strftime('%d-%b-%Y')}.** "
+            f"Today ({today.strftime('%d-%b-%Y')}) is currently in session and can be backfilled after market close (3:30 PM IST)."
+        )
+
     preset_choice = st.radio(
         "Quick Presets:",
         ["Last 7 Days", "Last 30 Days", "Last 90 Days", "Last 1 Year", "Last 5 Years", "Custom Range"],
@@ -45,23 +58,23 @@ def render_backtest_view(storage: StoragePort) -> None:
     )
 
     if preset_choice == "Last 7 Days":
-        default_start = today - dt.timedelta(days=7)
-        default_end = today
+        default_start = latest_date - dt.timedelta(days=7)
+        default_end = latest_date
     elif preset_choice == "Last 30 Days":
-        default_start = today - dt.timedelta(days=30)
-        default_end = today
+        default_start = latest_date - dt.timedelta(days=30)
+        default_end = latest_date
     elif preset_choice == "Last 90 Days":
-        default_start = today - dt.timedelta(days=90)
-        default_end = today
+        default_start = latest_date - dt.timedelta(days=90)
+        default_end = latest_date
     elif preset_choice == "Last 1 Year":
-        default_start = today - dt.timedelta(days=365)
-        default_end = today
+        default_start = latest_date - dt.timedelta(days=365)
+        default_end = latest_date
     elif preset_choice == "Last 5 Years":
-        default_start = today - dt.timedelta(days=1825)
-        default_end = today
+        default_start = latest_date - dt.timedelta(days=1825)
+        default_end = latest_date
     else:
-        default_start = today - dt.timedelta(days=30)
-        default_end = today
+        default_start = latest_date - dt.timedelta(days=30)
+        default_end = latest_date
 
     col_start, col_end = st.columns(2)
     start_date = col_start.date_input("Start Date", value=default_start)
